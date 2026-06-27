@@ -6,8 +6,11 @@
  * 输入格式 (resolveSecUid 支持):
  *   1. 主页长链: https://www.douyin.com/user/MS4w...      -> 正则取 sec_uid
  *   2. 裸 sec_uid: MS4w...                                 -> 直接用
- *   3. v.douyin.com 短链: 301 跳到主页                       -> 跟随重定向后取
- *   4. 数字 short_id / 抖音号(纯字母数字):                  -> 调签名的搜索接口反查
+ *   3. v.douyin.com 短链 / 带文案的分享:                    -> 提取链接→重定向→取 sec_uid
+ *   4. 数字 short_id / 抖音号:                              -> 签名搜索反查
+ *
+ * ⚠️ 关于 4: 抖音匿名搜索用户普遍返回 2483 (需登录态), 大概率解析失败。
+ *    推荐用户改用主页链接或 sec_uid (1/2/3)。
  */
 
 import { signedRequest } from "./douyin-web";
@@ -34,6 +37,12 @@ function looksLikeDouyinId(s: string): boolean {
   return /^[A-Za-z][A-Za-z0-9_]{5,19}$/.test(t);
 }
 
+/** 从分享文案中提取 http(s) 链接 (复用 douyin.ts 的同名逻辑)。 */
+function extractUrl(text: string): string | null {
+  const m = text.match(/https?:\/\/[^\s，。、；]+/);
+  return m ? m[0] : null;
+}
+
 /** 手动跟随重定向, 拿到最终 URL (复用 douyin.ts 的思路)。 */
 async function fetchFinalUrl(url: string): Promise<string> {
   let current = url;
@@ -54,41 +63,60 @@ async function fetchFinalUrl(url: string): Promise<string> {
 }
 
 /**
+ * 从一个 URL 里(可能含 query 参数)提取 sec_uid。
+ * 兼容: /user/<sec_uid>、裸 sec_uid、?sec_uid=、?sec_user_id=。
+ */
+function extractSecUidFromUrl(u: string): string | null {
+  // 1. 路径里的 sec_uid
+  const m = u.match(SEC_UID_RE) || u.match(USER_PATH_RE);
+  if (m && m[1]) return m[1];
+  // 2. query 里的 sec_uid / sec_user_id
+  const q = u.match(/[?&]sec_us(?:er_)?id=([A-Za-z0-9_.-]+)/);
+  if (q && q[1]) return q[1];
+  return null;
+}
+
+/**
  * 从任意用户输入解析出 sec_uid。
  *
- * @param input 主页链接 / 短链 / 裸 sec_uid / 数字 short_id / 抖音号
- * @returns sec_uid (解析失败抛错)
+ * @param input 主页链接 / 短链 / 带文案的分享 / 裸 sec_uid / 数字 short_id / 抖音号
+ * @returns sec_uid (解析失败抛错, 错误信息对用户友好)
  */
 export async function resolveSecUid(input: string): Promise<string> {
   const text = (input || "").trim();
   if (!text) throw new Error("输入为空");
 
-  // 1/2. 直接含 sec_uid (长链或裸 sec_uid)
-  const direct = text.match(SEC_UID_RE) || text.match(USER_PATH_RE);
-  if (direct && direct[1]) return direct[1];
+  // 1. 直接含 sec_uid (长链 / 裸 sec_uid / 文案里含 sec_uid 的链接)
+  const direct = extractSecUidFromUrl(text);
+  if (direct) return direct;
 
-  // 3. 短链 / 任意 douyin 链接: 跟随重定向后从最终 URL 取
-  if (/https?:\/\//i.test(text)) {
-    let finalUrl = text;
+  // 2. 含链接 (含分享文案): 先提取真正的 URL, 再跟随重定向
+  const link = extractUrl(text);
+  if (link) {
+    let finalUrl = link;
     try {
-      finalUrl = await fetchFinalUrl(text);
+      finalUrl = await fetchFinalUrl(link);
     } catch {
-      /* 忽略网络错误, 继续兜底 */
+      /* 网络错误则用原始 link 兜底 */
     }
-    const fromRedirect =
-      finalUrl.match(SEC_UID_RE) || finalUrl.match(USER_PATH_RE);
-    if (fromRedirect && fromRedirect[1]) return fromRedirect[1];
-    // 重定向目标里有时 sec_uid 在 query 里
-    const fromQuery = finalUrl.match(/sec_uid=([A-Za-z0-9_-]+)/);
-    if (fromQuery) return fromQuery[1];
-    throw new Error("无法从链接解析 sec_uid");
+    const sec = extractSecUidFromUrl(finalUrl);
+    if (sec) return sec;
+    // 重定向落到了抖音首页 (短链无效/已失效)
+    if (/douyin\.com\/?$/i.test(finalUrl) || finalUrl === link) {
+      throw new Error(
+        "短链无效或已失效，请确认是用户主页链接（不是视频/直播链接）",
+      );
+    }
+    throw new Error("无法从链接解析 sec_uid，请粘贴用户主页链接");
   }
 
-  // 4. 数字 short_id / 抖音号: 调签名搜索接口反查
+  // 3. 数字 short_id / 抖音号: 调签名搜索接口反查 (匿名常被风控, 见下方)
   if (looksLikeShortId(text) || looksLikeDouyinId(text)) {
     const sec = await searchUserSecUid(text);
     if (sec) return sec;
-    throw new Error(`未能找到对应用户: ${text}`);
+    throw new Error(
+      `无法解析「${text}」：抖音匿名搜索用户需要登录态，请改用主页链接或 sec_uid`,
+    );
   }
 
   throw new Error(`无法识别的输入: ${text}`);
@@ -144,6 +172,9 @@ export async function getUserProfile(secUid: string): Promise<UserProfile> {
 /**
  * 用 short_id / 抖音号 搜索, 取第一个匹配用户的 sec_uid。
  * 走签名的 aweme/v1/web/general/search/single/ 接口。
+ *
+ * ⚠️ 抖音匿名搜索用户普遍返回 status_code 2483 (需登录态),
+ *    这是抖音的反爬限制, 非代码问题。调用方应提示用户改用主页链接。
  */
 async function searchUserSecUid(keyword: string): Promise<string | null> {
   const r = await signedRequest<any>({
@@ -162,6 +193,9 @@ async function searchUserSecUid(keyword: string): Promise<string | null> {
     method: "GET",
   });
   if (!r.ok || !r.data) return null;
+  // 2483 = 需登录 / 风控, 明确告知无结果而非"未找到"
+  const sc = r.data?.status_code;
+  if (sc && sc !== 0) return null;
   const list = r.data?.data || [];
   for (const item of list) {
     const sec = item?.user?.sec_uid;

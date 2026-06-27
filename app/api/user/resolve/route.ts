@@ -43,7 +43,12 @@ export async function POST(req: NextRequest) {
       msg.includes("输入") ||
       msg.includes("解析") ||
       msg.includes("找到") ||
-      msg.includes("识别");
+      msg.includes("识别") ||
+      msg.includes("短链") ||
+      msg.includes("已失效") ||
+      msg.includes("主页链接") ||
+      msg.includes("登录态") ||
+      msg.includes("解析「");
     return NextResponse.json(
       { ok: false, error: msg },
       { status: isUserError ? 400 : 500 },

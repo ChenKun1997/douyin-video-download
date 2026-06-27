@@ -730,7 +730,7 @@ export default function Home() {
                   value={userInput}
                   onChange={(e) => setUserInput(e.target.value)}
                   placeholder={
-                    "输入用户主页链接 / sec_uid / 抖音号，例如：\nhttps://www.douyin.com/user/MS4wLjABAAAA...\n或 MS4wLjABAAAA..."
+                    "粘贴用户主页链接或 sec_uid，例如：\nhttps://www.douyin.com/user/MS4wLjABAAAA...\n或直接粘贴抖音 App「分享主页」复制的整段文案"
                   }
                 />
                 <div className="btn-group">
@@ -770,8 +770,10 @@ export default function Home() {
               </div>
               <div className="hint">
                 <span className="tag">提示</span>
-                支持主页长链 www.douyin.com/user/MS4...、v.douyin 短链、裸
-                sec_uid、数字 short_id、抖音号。⚠️ 抖音对连续翻页有风控，加载更多若失败请稍后再试
+                推荐：主页长链 www.douyin.com/user/MS4...、v.douyin
+                分享短链、或 App「分享主页」的整段文案、裸 sec_uid。
+                ⚠️ 抖音号/数字ID 因匿名搜索需登录态，大概率解析不了；
+                翻页加载若失败是抖音风控，请稍后再试
               </div>
             </div>
 
