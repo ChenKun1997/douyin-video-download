@@ -810,6 +810,14 @@ footer a {
   margin-top: 16px;
 }
 
+.uv-limit {
+  max-width: 100%;
+  line-height: 1.6;
+  text-align: center;
+  white-space: normal;
+  padding: 8px 14px;
+}
+
 /* 桌面端: 作品网格放大列数, tab 文字加大 */
 @media (min-width: 640px) {
   .uv-grid {

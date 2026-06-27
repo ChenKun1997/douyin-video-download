@@ -223,19 +223,35 @@ export interface VideoListItem {
 
 export interface VideoPage {
   items: VideoListItem[];
-  /** 下一页游标; has_more=false 时为 0 */
+  /** 下一页游标 (抖音匿名访问下 cursor 分页不可用, 仅作记录) */
   max_cursor: number;
   has_more: boolean;
+  /** 抖音匿名访问是否还能继续翻页 (实际为 false: 见 MAX_FETCHABLE 说明) */
+  can_fetch_more: boolean;
 }
 
-const PAGE_SIZE = 18;
+/**
+ * 单次请求的 count。
+ *
+ * 实测 (含 f2 Python 权威实现对照): 抖音 web aweme/post 接口在
+ * 「无登录态 / 纯签名访问」下, 单个用户无论 count 多大, 最多只返回
+ * ~41 条作品; 且 cursor 分页 (max_cursor≠0) 一律返回空。
+ * 因此 count 设 50 以一次性拿满上限, 不再翻页。
+ */
+const PAGE_SIZE = 50;
+/** 抖音匿名访问下, 单用户可获取的作品上限 (实测, 含 f2 对照)。 */
+export const MAX_FETCHABLE = 41;
 
 /**
- * 拉取用户作品列表的「一页」。
- * 由前端循环调用以规避 Vercel 函数时长限制 (每页 ~0.6s)。
+ * 拉取用户作品列表。
+ *
+ * ⚠️ 实测抖音 web aweme/post 在匿名(纯签名)访问下:
+ *   - 单次最多返回 ~MAX_FETCHABLE 条 (count=50 即可拿满)
+ *   - cursor 分页不可用 (max_cursor≠0 一律返回空)
+ * 因此本函数一次拉取上限, 不做翻页。前端不应再显示「加载更多」。
  *
  * @param secUid 用户 sec_uid
- * @param cursor 上一页返回的 max_cursor; 首页传 0
+ * @param cursor 保留参数 (兼容旧调用), 实际忽略
  */
 export async function fetchUserVideoPage(
   secUid: string,
@@ -263,10 +279,13 @@ export async function fetchUserVideoPage(
   const d = r.data;
   const list: any[] = Array.isArray(d.aweme_list) ? d.aweme_list : [];
   const items: VideoListItem[] = list.map((a) => parseAweme(a));
+  // 匿名访问下 cursor 分页不可用, 永远不能再加载更多
+  const canFetchMore = false;
   return {
     items,
     max_cursor: Number(d.max_cursor || 0),
     has_more: !!d.has_more,
+    can_fetch_more: canFetchMore,
   };
 }
 

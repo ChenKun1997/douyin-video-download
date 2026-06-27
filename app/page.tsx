@@ -388,8 +388,8 @@ export default function Home() {
         `已解析: ${json.profile.nickname} (${json.profile.aweme_count} 个作品)`,
         2500,
       );
-      // 自动拉取第一页
-      void loadMoreVideos(json.profile.sec_uid, 0);
+      // 自动拉取作品列表 (受抖音匿名接口限制, 仅最近 ~41 个)
+      void loadVideos(json.profile.sec_uid);
     } catch (e) {
       showStatus(
         "error",
@@ -400,35 +400,31 @@ export default function Home() {
     }
   }, [userInput, showStatus]);
 
-  const loadMoreVideos = useCallback(
-    async (secUid: string, cursor: number) => {
+  const loadVideos = useCallback(
+    async (secUid: string) => {
       setLoadingVideos(true);
-      showStatus("info", `正在加载作品 (cursor=${cursor})...`);
+      showStatus("info", "正在加载作品列表...");
       try {
         const resp = await fetch(
-          `/api/user/videos?sec_uid=${encodeURIComponent(secUid)}&cursor=${cursor}`,
+          `/api/user/videos?sec_uid=${encodeURIComponent(secUid)}&cursor=0`,
         );
         const json = await resp.json();
         if (!resp.ok || !json.ok) {
           throw new Error(json.error || `请求失败 (${resp.status})`);
         }
         const page = json.page;
-        setUserVideos((prev) => [...prev, ...page.items]);
+        setUserVideos(page.items);
         setHasMoreVideos(!!page.has_more);
         setVideoCursor(Number(page.max_cursor || 0));
         showStatus("success", `已加载 ${page.items.length} 个作品`, 2000);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        // 风控: 429 或文案提示
-        if (/风控|签名|429|verify/i.test(msg)) {
-          showStatus(
-            "error",
-            "触发抖音风控，请稍等几秒后点击「加载更多」重试",
-          );
-        } else {
-          showStatus("error", "加载失败：" + msg);
-        }
-        setHasMoreVideos(false);
+        showStatus(
+          "error",
+          /风控|签名|429|verify/i.test(msg)
+            ? "触发抖音风控，请稍后再试"
+            : "加载失败：" + msg,
+        );
       } finally {
         setLoadingVideos(false);
       }
@@ -786,8 +782,8 @@ export default function Home() {
                 <span className="tag">提示</span>
                 推荐：主页长链 www.douyin.com/user/MS4...、v.douyin
                 分享短链、或 App「分享主页」的整段文案、裸 sec_uid。
-                ⚠️ 抖音号/数字ID 因匿名搜索需登录态，大概率解析不了；
-                翻页加载若失败是抖音风控，请稍后再试
+                ⚠️ 抖音号/数字ID 匿名搜索需登录态，大概率解析不了；
+                受抖音匿名接口限制，单用户最多加载最近约 41 个作品
               </div>
             </div>
 
@@ -919,29 +915,13 @@ export default function Home() {
                   ))}
                 </div>
 
-                {/* 加载更多 */}
+                {/* 抖音匿名访问限制说明 (替代失效的「加载更多」) */}
                 <div className="uv-more">
-                  {hasMoreVideos ? (
-                    <button
-                      className="btn btn-primary"
-                      onClick={() => loadMoreVideos(profile.sec_uid, videoCursor)}
-                      disabled={loadingVideos}
-                    >
-                      {loadingVideos ? (
-                        <>
-                          <span className="spinner" /> 加载中...
-                        </>
-                      ) : (
-                        "⬇ 加载更多"
-                      )}
-                    </button>
-                  ) : (
-                    <span className="badge">
-                      {userVideos.length > 0
-                        ? "没有更多了 / 已加载全部或触发风控"
-                        : "暂无作品"}
-                    </span>
-                  )}
+                  <span className="badge uv-limit">
+                    {profile.aweme_count > userVideos.length
+                      ? `已加载最近 ${userVideos.length} 个作品 · 抖音匿名接口限制，无法获取更早的作品（共 ${profile.aweme_count} 个）`
+                      : `已加载全部 ${userVideos.length} 个作品`}
+                  </span>
                 </div>
               </div>
             )}
