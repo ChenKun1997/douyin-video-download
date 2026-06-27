@@ -216,6 +216,18 @@ export default function Home() {
     );
   };
 
+  /**
+   * 把抖音图床 URL 转为经过本站 /api/proxy?mode=image 转发的地址。
+   * 解决浏览器直连 douyinpic.com 在部分网络/地区裂图 (403/超时)。
+   * null/空值原样返回, 交给 onError 占位逻辑处理。
+   */
+  const imgSrc = (url: string | null | undefined): string => {
+    if (!url) return "";
+    return (
+      "/api/proxy?url=" + encodeURIComponent(url) + "&mode=image"
+    );
+  };
+
   // ----------------- 下载 (单视频 / 用户列表项共用) -----------------
   const buildFilename = (
     author: string,
@@ -596,8 +608,9 @@ export default function Home() {
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
                       className="cover"
-                      src={currentVideo.cover_url}
+                      src={imgSrc(currentVideo.cover_url)}
                       alt="封面"
+                      referrerPolicy="no-referrer"
                       onError={(e) => {
                         const t = e.target as HTMLImageElement;
                         t.classList.add("placeholder");
@@ -674,8 +687,9 @@ export default function Home() {
                         // eslint-disable-next-line @next/next/no-img-element
                         <img
                           className="h-cover"
-                          src={h.cover_url}
+                          src={imgSrc(h.cover_url)}
                           alt=""
+                          referrerPolicy="no-referrer"
                           onError={(e) => {
                             const t = e.target as HTMLImageElement;
                             t.classList.add("placeholder");
@@ -787,8 +801,9 @@ export default function Home() {
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
                       className="cover avatar"
-                      src={profile.avatar_url}
+                      src={imgSrc(profile.avatar_url)}
                       alt="头像"
+                      referrerPolicy="no-referrer"
                       onError={(e) => {
                         const t = e.target as HTMLImageElement;
                         t.classList.add("placeholder");
@@ -860,8 +875,9 @@ export default function Home() {
                           {v.cover_url ? (
                             // eslint-disable-next-line @next/next/no-img-element
                             <img
-                              src={v.cover_url}
+                              src={imgSrc(v.cover_url)}
                               alt=""
+                              referrerPolicy="no-referrer"
                               onError={(e) => {
                                 const t = e.target as HTMLImageElement;
                                 t.classList.add("placeholder");
