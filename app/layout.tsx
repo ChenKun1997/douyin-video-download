@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "抖音无水印下载",
-  description: "粘贴分享文案或链接，一键解析无水印视频",
+  description: "解析单个视频，或输入用户主页批量下载无水印视频",
 };
 
 // viewport 单独导出: 含 viewport-fit=cover 才能让 iOS 安全区 (env(safe-area-inset-*)) 生效

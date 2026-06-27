@@ -1,19 +1,21 @@
 "use client";
 
 /**
- * 抖音无水印下载 - 主页面 (迁移自原 index.html)
+ * 抖音无水印下载 - 主页面
  *
- * 功能与原版一致:
- *   - 粘贴分享文案/链接 -> 解析 -> 预览 -> 下载
- *   - 清晰度选择 (1080P/720P/540P)
- *   - 复制无水印直链
- *   - 本地历史记录 (localStorage, 最多 30 条)
- *   - Ctrl/Cmd + Enter 快捷解析
+ * 两种模式 (顶部 tab 切换):
+ *   1. 单视频: 粘贴分享文案/链接 -> 解析 -> 预览 -> 下载 (原功能)
+ *   2. 用户主页: 输入用户主页链接/sec_uid/抖音号 -> 拉取作品列表 -> 批量/单个下载
  *
- * 新增: 下载失败时 (Vercel 免费版 10s 超时) 提示用复制直链兜底。
+ * 单视频模式逻辑与原版完全一致, 此处保留。用户主页模式依赖
+ * /api/user/resolve + /api/user/videos (a_bogus 签名接口)。
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+
+// ----------------------------------------------------------------------
+// 类型
+// ----------------------------------------------------------------------
 
 interface Quality {
   ratio: string;
@@ -40,6 +42,25 @@ interface HistoryItem {
   ts: number;
 }
 
+interface UserProfile {
+  sec_uid: string;
+  short_id: string;
+  nickname: string;
+  avatar_url: string | null;
+  aweme_count: number;
+  signature: string;
+}
+
+interface UserVideo {
+  aweme_id: string;
+  desc: string;
+  create_time: number;
+  cover_url: string | null;
+  play_url: string | null;
+  video_id: string | null;
+  duration: number;
+}
+
 const HISTORY_KEY = "douyin_history_v1";
 
 type StatusType = "info" | "error" | "success";
@@ -48,37 +69,54 @@ interface StatusState {
   msg: string;
 }
 
+type Mode = "single" | "user";
+
+// ----------------------------------------------------------------------
+// 主组件
+// ----------------------------------------------------------------------
+
 export default function Home() {
-  const [input, setInput] = useState("");
-  const [parsing, setParsing] = useState(false);
-  const [downloading, setDownloading] = useState(false);
+  const [mode, setMode] = useState<Mode>("single");
+
+  // ----------------- 共用状态提示 -----------------
   const [status, setStatus] = useState<StatusState | null>(null);
-  const [currentVideo, setCurrentVideo] = useState<VideoInfo | null>(null);
-  const [selectedQuality, setSelectedQuality] = useState<Quality | null>(null);
-  const [history, setHistory] = useState<HistoryItem[]>([]);
-
   const statusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // ----------------- 状态提示 -----------------
   const showStatus = useCallback(
     (type: StatusType, msg: string, autoClose = 0) => {
       if (statusTimer.current) clearTimeout(statusTimer.current);
       setStatus({ type, msg });
       if (autoClose) {
-        statusTimer.current = setTimeout(
-          () => setStatus(null),
-          autoClose,
-        );
+        statusTimer.current = setTimeout(() => setStatus(null), autoClose);
       }
     },
     [],
   );
-
   useEffect(
     () => () => {
       if (statusTimer.current) clearTimeout(statusTimer.current);
     },
     [],
+  );
+
+  // ----------------- 单视频状态 -----------------
+  const [input, setInput] = useState("");
+  const [parsing, setParsing] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [currentVideo, setCurrentVideo] = useState<VideoInfo | null>(null);
+  const [selectedQuality, setSelectedQuality] = useState<Quality | null>(null);
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+
+  // ----------------- 用户模式状态 -----------------
+  const [userInput, setUserInput] = useState("");
+  const [resolving, setResolving] = useState(false);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [userVideos, setUserVideos] = useState<UserVideo[]>([]);
+  const [loadingVideos, setLoadingVideos] = useState(false);
+  const [hasMoreVideos, setHasMoreVideos] = useState(false);
+  const [videoCursor, setVideoCursor] = useState(0);
+  const [selectedVideos, setSelectedVideos] = useState<Set<string>>(new Set());
+  const [batchDl, setBatchDl] = useState<{ done: number; total: number } | null>(
+    null,
   );
 
   // ----------------- 历史记录 -----------------
@@ -126,7 +164,7 @@ export default function Home() {
     }
   };
 
-  // ----------------- 解析 -----------------
+  // ----------------- 单视频: 解析 -----------------
   const parse = useCallback(async () => {
     const text = input.trim();
     if (!text) {
@@ -159,7 +197,6 @@ export default function Home() {
 
   const renderResult = (data: VideoInfo) => {
     setCurrentVideo(data);
-    // 清晰度: 没有列表时退化为单选项
     const qualities =
       data.qualities && data.qualities.length
         ? data.qualities
@@ -179,96 +216,84 @@ export default function Home() {
     );
   };
 
-  // ----------------- 下载 -----------------
-  /**
-   * 下载策略 (优化版, 解决 Vercel 部署后"很慢才开始/下载失败"问题):
-   *   1. 优先 redirect 模式: 让 /api/proxy 探出最终 CDN 地址并 302,
-   *      浏览器直连 CDN 下载 —— 不经 Vercel 转发, 速度最快, 不受超时限制。
-   *   2. 若 redirect 失败 (CDN 校验 Referer 导致直连 403), 自动降级 stream 模式:
-   *      由 Vercel 流式转发 (受 10s 超时限制, 仅小视频可靠)。
-   *
-   * 用 fetch 探测 proxy 是否成功返回 302 (而非 JSON 错误),
-   * 成功后才用 <a> 触发浏览器原生下载。
-   */
-  const download = useCallback(
-    async (video: VideoInfo | null, quality: Quality | null) => {
-      if (!video) return;
-      const videoUrl = (quality && quality.url) || video.video_url;
-      const qualityTag = quality ? quality.label : "";
-      const fname =
-        (video.author ? video.author + "_" : "") +
-        video.title +
-        (qualityTag ? "_" + qualityTag : "") +
-        ".mp4";
+  // ----------------- 下载 (单视频 / 用户列表项共用) -----------------
+  const buildFilename = (
+    author: string,
+    title: string,
+    qualityTag: string,
+  ): string =>
+    (author ? author + "_" : "") +
+    title +
+    (qualityTag ? "_" + qualityTag : "") +
+    ".mp4";
 
-      const buildProxyUrl = (mode: "redirect" | "stream") =>
+  const downloadVideo = useCallback(
+    async (
+      url: string,
+      filename: string,
+      qualityTag = "",
+    ): Promise<"ok" | "fail"> => {
+      const buildProxyUrl = (m: "redirect" | "stream") =>
         "/api/proxy?url=" +
-        encodeURIComponent(videoUrl) +
+        encodeURIComponent(url) +
         "&filename=" +
-        encodeURIComponent(fname) +
+        encodeURIComponent(filename) +
         "&mode=" +
-        mode;
-
-      const triggerDownload = (proxyUrl: string) => {
+        m;
+      const trigger = (proxyUrl: string) => {
         const a = document.createElement("a");
         a.href = proxyUrl;
-        a.download = fname; // 同源时生效; 跨域 302 后浏览器忽略此属性 (无妨)
+        a.download = filename;
         document.body.appendChild(a);
         a.click();
         a.remove();
       };
 
-      showStatus("info", `准备下载 ${qualityTag || "视频"}...`);
-      setDownloading(true);
-
       try {
-        // 1. 先探测 redirect 模式是否可用。
-        //    注意: 浏览器对 fetch + redirect:"manual" 返回 opaqueredirect 响应,
-        //    其 status 永远是 0、且读不到 Location 头 (浏览器规范限制)。
-        //    因此不能用 status===302 判断, 而要用 response.type === "opaqueredirect":
-        //    它恰好表示"服务端返回了一个重定向响应"。
         let redirectOk = false;
         try {
           const probe = await fetch(buildProxyUrl("redirect"), {
             redirect: "manual",
           });
           redirectOk = probe.type === "opaqueredirect";
-          if (!redirectOk) {
-            // 服务端没重定向 (返回了 JSON 错误), 记录原因便于排查
-            const err = await probe.text().catch(() => "");
-            console.warn(
-              "[download] redirect 模式未返回重定向, 降级 stream:",
-              probe.status,
-              err.slice(0, 200),
-            );
-          }
-        } catch (e) {
-          console.warn("[download] redirect 探测异常, 降级 stream:", e);
+        } catch {
+          /* 降级 stream */
         }
-
         if (redirectOk) {
-          // 2a. redirect 探路成功: 用 <a> 触发下载, 浏览器会跟随 302 直连 CDN
-          triggerDownload(buildProxyUrl("redirect"));
-          showStatus(
-            "success",
-            "已开始下载（直连 CDN），请查看浏览器下载",
-            3500,
-          );
-          return;
+          trigger(buildProxyUrl("redirect"));
+          return "ok";
         }
+        trigger(buildProxyUrl("stream"));
+        return "ok";
+      } catch {
+        return "fail";
+      }
+    },
+    [],
+  );
 
-        // 2b. redirect 失败 -> 降级 stream 模式 (流式转发, 受 10s 超时限制)
-        triggerDownload(buildProxyUrl("stream"));
+  const download = useCallback(
+    async (video: VideoInfo | null, quality: Quality | null) => {
+      if (!video) return;
+      const videoUrl = (quality && quality.url) || video.video_url;
+      const qualityTag = quality ? quality.label : "";
+      const fname = buildFilename(video.author, video.title, qualityTag);
+      showStatus("info", `准备下载 ${qualityTag || "视频"}...`);
+      setDownloading(true);
+      try {
+        const r = await downloadVideo(videoUrl, fname, qualityTag);
         showStatus(
-          "info",
-          "正在通过服务器转发下载（较慢），大视频若未完成可点'复制直链'用下载工具",
-          5000,
+          r === "ok" ? "success" : "error",
+          r === "ok"
+            ? "已开始下载，请查看浏览器下载"
+            : "下载失败",
+          3000,
         );
       } finally {
         setDownloading(false);
       }
     },
-    [showStatus],
+    [downloadVideo, showStatus],
   );
 
   const copyUrl = useCallback(async () => {
@@ -292,9 +317,7 @@ export default function Home() {
     }
   }, [showStatus]);
 
-  // ----------------- 历史项操作 -----------------
   const onHistoryLoad = (item: HistoryItem) => {
-    // 历史记录里只有 video_url (默认清晰度), 重新加载时以默认档呈现
     renderResult({
       ...item,
       qualities: [{ ratio: "default", label: "默认", url: item.video_url }],
@@ -311,7 +334,6 @@ export default function Home() {
     );
   };
 
-  // ----------------- 快捷键 -----------------
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
       e.preventDefault();
@@ -325,6 +347,165 @@ export default function Home() {
       ? [{ ratio: "default", label: "默认", url: currentVideo.video_url }]
       : [];
 
+  // ----------------- 用户模式: 解析 + 拉取 -----------------
+  const resolveUser = useCallback(async () => {
+    const text = userInput.trim();
+    if (!text) {
+      showStatus("error", "请输入用户主页链接或 sec_uid");
+      return;
+    }
+    setResolving(true);
+    setProfile(null);
+    setUserVideos([]);
+    setSelectedVideos(new Set());
+    setHasMoreVideos(false);
+    showStatus("info", "正在解析用户...");
+    try {
+      const resp = await fetch("/api/user/resolve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ input: text }),
+      });
+      const json = await resp.json();
+      if (!resp.ok || !json.ok) {
+        throw new Error(json.error || `请求失败 (${resp.status})`);
+      }
+      setProfile(json.profile as UserProfile);
+      showStatus(
+        "success",
+        `已解析: ${json.profile.nickname} (${json.profile.aweme_count} 个作品)`,
+        2500,
+      );
+      // 自动拉取第一页
+      void loadMoreVideos(json.profile.sec_uid, 0);
+    } catch (e) {
+      showStatus(
+        "error",
+        "解析失败：" + (e instanceof Error ? e.message : String(e)),
+      );
+    } finally {
+      setResolving(false);
+    }
+  }, [userInput, showStatus]);
+
+  const loadMoreVideos = useCallback(
+    async (secUid: string, cursor: number) => {
+      setLoadingVideos(true);
+      showStatus("info", `正在加载作品 (cursor=${cursor})...`);
+      try {
+        const resp = await fetch(
+          `/api/user/videos?sec_uid=${encodeURIComponent(secUid)}&cursor=${cursor}`,
+        );
+        const json = await resp.json();
+        if (!resp.ok || !json.ok) {
+          throw new Error(json.error || `请求失败 (${resp.status})`);
+        }
+        const page = json.page;
+        setUserVideos((prev) => [...prev, ...page.items]);
+        setHasMoreVideos(!!page.has_more);
+        setVideoCursor(Number(page.max_cursor || 0));
+        showStatus("success", `已加载 ${page.items.length} 个作品`, 2000);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        // 风控: 429 或文案提示
+        if (/风控|签名|429|verify/i.test(msg)) {
+          showStatus(
+            "error",
+            "触发抖音风控，请稍等几秒后点击「加载更多」重试",
+          );
+        } else {
+          showStatus("error", "加载失败：" + msg);
+        }
+        setHasMoreVideos(false);
+      } finally {
+        setLoadingVideos(false);
+      }
+    },
+    [showStatus],
+  );
+
+  // ----------------- 用户模式: 选择 + 批量下载 -----------------
+  const toggleSelect = (id: string) => {
+    setSelectedVideos((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const selectAll = () => {
+    setSelectedVideos(new Set(userVideos.map((v) => v.aweme_id)));
+  };
+  const selectNone = () => setSelectedVideos(new Set());
+
+  const buildUserVideoUrl = (v: UserVideo): string | null => {
+    if (v.video_id) {
+      return `https://aweme.snssdk.com/aweme/v1/play/?video_id=${v.video_id}&ratio=720p&line=0`;
+    }
+    return v.play_url;
+  };
+
+  const downloadOne = useCallback(
+    async (v: UserVideo) => {
+      const url = buildUserVideoUrl(v);
+      if (!url) {
+        showStatus("error", "该视频缺少可下载地址");
+        return;
+      }
+      const author = profile?.nickname || "";
+      const fname = buildFilename(author, v.desc || v.aweme_id, "720P");
+      showStatus("info", "准备下载...");
+      await downloadVideo(url, fname, "720P");
+    },
+    [profile, downloadVideo, showStatus],
+  );
+
+  const downloadBatch = useCallback(async () => {
+    const targets = userVideos.filter((v) => selectedVideos.has(v.aweme_id));
+    if (!targets.length) {
+      showStatus("error", "请先勾选要下载的作品");
+      return;
+    }
+    setBatchDl({ done: 0, total: targets.length });
+    const author = profile?.nickname || "";
+    let done = 0;
+    let fail = 0;
+    for (const v of targets) {
+      const url = buildUserVideoUrl(v);
+      if (!url) {
+        fail++;
+      } else {
+        const fname = buildFilename(author, v.desc || v.aweme_id, "720P");
+        const r = await downloadVideo(url, fname, "720P");
+        if (r === "fail") fail++;
+        // 浏览器并发下载限制: 顺序触发, 间隔避免被浏览器拦截
+        await new Promise((res) => setTimeout(res, 800));
+      }
+      done++;
+      setBatchDl({ done, total: targets.length });
+    }
+    setBatchDl(null);
+    showStatus(
+      fail ? "error" : "success",
+      fail
+        ? `批量下载完成, ${done - fail} 成功 / ${fail} 失败`
+        : `批量下载已全部触发 (${done} 个)`,
+      4000,
+    );
+  }, [userVideos, selectedVideos, profile, downloadVideo, showStatus]);
+
+  const pasteUserFromClipboard = useCallback(async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      setUserInput(text.trim());
+      showStatus("info", "已粘贴剪贴板内容", 1500);
+    } catch {
+      showStatus("error", "无法读取剪贴板，请手动粘贴");
+    }
+  }, [showStatus]);
+
+  // ----------------------------------------------------------------------
   return (
     <>
       <header>
@@ -335,211 +516,453 @@ export default function Home() {
           </span>
         </div>
         <div className="subtitle">
-          粘贴分享文案或链接，一键解析无水印视频
+          粘贴分享文案解析单个视频，或输入用户主页批量下载
         </div>
       </header>
 
       <div className="wrap">
-        {/* 输入 */}
-        <div className="input-card">
-          <div className="input-row">
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={onKeyDown}
-              placeholder={
-                "在此粘贴抖音分享文案，例如：\n7.99 复制打开抖音，看看【作者的作品】 https://v.douyin.com/xxxxx/ ..."
-              }
-            />
-            <div className="btn-group">
-              <button
-                className="btn btn-primary"
-                onClick={parse}
-                disabled={parsing}
-              >
-                {parsing ? (
-                  <>
-                    <span className="spinner" /> 解析中...
-                  </>
-                ) : (
-                  "🔍 解析"
-                )}
-              </button>
-              <div className="row-secondary">
-                <button
-                  className="btn btn-ghost"
-                  onClick={pasteFromClipboard}
-                >
-                  📋 粘贴剪贴板
-                </button>
-                <button
-                  className="btn btn-ghost"
-                  onClick={() => {
-                    setInput("");
-                  }}
-                >
-                  ✖ 清空
-                </button>
-              </div>
-            </div>
-          </div>
-          <div className="hint">
-            <span className="tag">提示</span>
-            支持短链 v.douyin.com / 长链 www.douyin.com，可直接粘贴 App
-            分享的整段文案 · 输入框内按 Ctrl/Cmd + Enter 快速解析
-          </div>
+        {/* 模式切换 */}
+        <div className="mode-tabs">
+          <button
+            className={"mode-tab" + (mode === "single" ? " active" : "")}
+            onClick={() => setMode("single")}
+          >
+            🎬 单个视频
+          </button>
+          <button
+            className={"mode-tab" + (mode === "user" ? " active" : "")}
+            onClick={() => setMode("user")}
+          >
+            👤 用户主页
+          </button>
         </div>
 
-        {/* 状态条 */}
-        {status && (
-          <div className={`status show ${status.type}`}>
-            <span>
-              {status.type === "error"
-                ? "⚠️"
-                : status.type === "success"
-                  ? "✅"
-                  : "⏳"}
-            </span>
-            <span>{status.msg}</span>
-          </div>
-        )}
-
-        {/* 结果 */}
-        {currentVideo && (
-          <div className="result">
-            <div className="result-head">
-              {currentVideo.cover_url ? (
-                // 抖音封面图无 CORS/Referer 限制, 直接 <img>
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  className="cover"
-                  src={currentVideo.cover_url}
-                  alt="封面"
-                  onError={(e) => {
-                    const t = e.target as HTMLImageElement;
-                    t.classList.add("placeholder");
-                    t.removeAttribute("src");
-                    t.alt = "无封面";
-                  }}
+        {/* ============ 单视频模式 ============ */}
+        {mode === "single" && (
+          <>
+            <div className="input-card">
+              <div className="input-row">
+                <textarea
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={onKeyDown}
+                  placeholder={
+                    "在此粘贴抖音分享文案，例如：\n7.99 复制打开抖音，看看【作者的作品】 https://v.douyin.com/xxxxx/ ..."
+                  }
                 />
-              ) : (
-                <div className="cover placeholder">无封面</div>
-              )}
-              <div className="meta">
-                <div className="title">{currentVideo.title}</div>
-                <div className="author">
-                  {currentVideo.author
-                    ? "👤 " + currentVideo.author
-                    : ""}
-                </div>
-                <div className="id-line">ID: {currentVideo.aweme_id}</div>
-              </div>
-            </div>
-            <div className="quality-row">
-              <span className="label">清晰度：</span>
-              <div className="quality-options">
-                {qualities.map((q) => (
+                <div className="btn-group">
                   <button
-                    key={q.ratio}
-                    className={
-                      "quality-opt" +
-                      (selectedQuality?.ratio === q.ratio
-                        ? " active"
-                        : "")
-                    }
-                    onClick={() => setSelectedQuality(q)}
+                    className="btn btn-primary"
+                    onClick={parse}
+                    disabled={parsing}
                   >
-                    {q.label}
+                    {parsing ? (
+                      <>
+                        <span className="spinner" /> 解析中...
+                      </>
+                    ) : (
+                      "🔍 解析"
+                    )}
                   </button>
-                ))}
+                  <div className="row-secondary">
+                    <button
+                      className="btn btn-ghost"
+                      onClick={pasteFromClipboard}
+                    >
+                      📋 粘贴剪贴板
+                    </button>
+                    <button
+                      className="btn btn-ghost"
+                      onClick={() => setInput("")}
+                    >
+                      ✖ 清空
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div className="hint">
+                <span className="tag">提示</span>
+                支持短链 v.douyin.com / 长链 www.douyin.com，可直接粘贴 App
+                分享的整段文案 · 输入框内按 Ctrl/Cmd + Enter 快速解析
               </div>
             </div>
-            <div className="result-actions">
-              <button
-                className="btn btn-primary"
-                onClick={() => download(currentVideo, selectedQuality)}
-                disabled={downloading}
-              >
-                {downloading ? (
-                  <>
-                    <span className="spinner" /> 准备中...
-                  </>
-                ) : (
-                  "⬇ 下载视频"
-                )}
-              </button>
-              <button className="btn btn-ghost" onClick={copyUrl}>
-                🔗 复制无水印链接
-              </button>
-              <span className="badge">✓ 已解析为无水印地址</span>
-            </div>
-          </div>
-        )}
 
-        {/* 历史 */}
-        {history.length > 0 && (
-          <div className="history">
-            <div className="section-title">
-              <h2>🕓 本地历史记录</h2>
-              <button className="clear" onClick={clearHistory}>
-                清空记录
-              </button>
-            </div>
-            <div className="history-list">
-              {history.map((h) => (
-                <div className="history-item" key={h.aweme_id + h.ts}>
-                  {h.cover_url ? (
+            {status && <StatusBar status={status} />}
+
+            {currentVideo && (
+              <div className="result">
+                <div className="result-head">
+                  {currentVideo.cover_url ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
-                      className="h-cover"
-                      src={h.cover_url}
-                      alt=""
+                      className="cover"
+                      src={currentVideo.cover_url}
+                      alt="封面"
                       onError={(e) => {
                         const t = e.target as HTMLImageElement;
                         t.classList.add("placeholder");
                         t.removeAttribute("src");
-                        t.alt = "无";
+                        t.alt = "无封面";
                       }}
                     />
                   ) : (
-                    <div className="h-cover placeholder">无</div>
+                    <div className="cover placeholder">无封面</div>
                   )}
-                  <button
-                    type="button"
-                    className="h-info"
-                    title="点击重新加载"
-                    onClick={() => onHistoryLoad(h)}
-                  >
-                    <div className="h-title">{h.title}</div>
-                    <div className="h-author">
-                      {h.author ? "👤 " + h.author : ""} · {timeAgo(h.ts)}
+                  <div className="meta">
+                    <div className="title">{currentVideo.title}</div>
+                    <div className="author">
+                      {currentVideo.author
+                        ? "👤 " + currentVideo.author
+                        : ""}
                     </div>
+                    <div className="id-line">ID: {currentVideo.aweme_id}</div>
+                  </div>
+                </div>
+                <div className="quality-row">
+                  <span className="label">清晰度：</span>
+                  <div className="quality-options">
+                    {qualities.map((q) => (
+                      <button
+                        key={q.ratio}
+                        className={
+                          "quality-opt" +
+                          (selectedQuality?.ratio === q.ratio
+                            ? " active"
+                            : "")
+                        }
+                        onClick={() => setSelectedQuality(q)}
+                      >
+                        {q.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="result-actions">
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => download(currentVideo, selectedQuality)}
+                    disabled={downloading}
+                  >
+                    {downloading ? (
+                      <>
+                        <span className="spinner" /> 准备中...
+                      </>
+                    ) : (
+                      "⬇ 下载视频"
+                    )}
                   </button>
-                  <div className="h-actions">
+                  <button className="btn btn-ghost" onClick={copyUrl}>
+                    🔗 复制无水印链接
+                  </button>
+                  <span className="badge">✓ 已解析为无水印地址</span>
+                </div>
+              </div>
+            )}
+
+            {history.length > 0 && (
+              <div className="history">
+                <div className="section-title">
+                  <h2>🕓 本地历史记录</h2>
+                  <button className="clear" onClick={clearHistory}>
+                    清空记录
+                  </button>
+                </div>
+                <div className="history-list">
+                  {history.map((h) => (
+                    <div className="history-item" key={h.aweme_id + h.ts}>
+                      {h.cover_url ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          className="h-cover"
+                          src={h.cover_url}
+                          alt=""
+                          onError={(e) => {
+                            const t = e.target as HTMLImageElement;
+                            t.classList.add("placeholder");
+                            t.removeAttribute("src");
+                            t.alt = "无";
+                          }}
+                        />
+                      ) : (
+                        <div className="h-cover placeholder">无</div>
+                      )}
+                      <button
+                        type="button"
+                        className="h-info"
+                        title="点击重新加载"
+                        onClick={() => onHistoryLoad(h)}
+                      >
+                        <div className="h-title">{h.title}</div>
+                        <div className="h-author">
+                          {h.author ? "👤 " + h.author : ""} · {timeAgo(h.ts)}
+                        </div>
+                      </button>
+                      <div className="h-actions">
+                        <button
+                          className="icon-btn"
+                          title="下载"
+                          onClick={() => onHistoryDl(h)}
+                        >
+                          ⬇
+                        </button>
+                        <button
+                          className="icon-btn danger"
+                          title="删除"
+                          onClick={() => deleteHistory(h.aweme_id)}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* ============ 用户主页模式 ============ */}
+        {mode === "user" && (
+          <>
+            <div className="input-card">
+              <div className="input-row">
+                <textarea
+                  value={userInput}
+                  onChange={(e) => setUserInput(e.target.value)}
+                  placeholder={
+                    "输入用户主页链接 / sec_uid / 抖音号，例如：\nhttps://www.douyin.com/user/MS4wLjABAAAA...\n或 MS4wLjABAAAA..."
+                  }
+                />
+                <div className="btn-group">
+                  <button
+                    className="btn btn-primary"
+                    onClick={resolveUser}
+                    disabled={resolving}
+                  >
+                    {resolving ? (
+                      <>
+                        <span className="spinner" /> 解析中...
+                      </>
+                    ) : (
+                      "🔍 解析用户"
+                    )}
+                  </button>
+                  <div className="row-secondary">
                     <button
-                      className="icon-btn"
-                      title="下载"
-                      onClick={() => onHistoryDl(h)}
+                      className="btn btn-ghost"
+                      onClick={pasteUserFromClipboard}
                     >
-                      ⬇
+                      📋 粘贴剪贴板
                     </button>
                     <button
-                      className="icon-btn danger"
-                      title="删除"
-                      onClick={() => deleteHistory(h.aweme_id)}
+                      className="btn btn-ghost"
+                      onClick={() => {
+                        setUserInput("");
+                        setProfile(null);
+                        setUserVideos([]);
+                        setSelectedVideos(new Set());
+                      }}
                     >
-                      ✕
+                      ✖ 清空
                     </button>
                   </div>
                 </div>
-              ))}
+              </div>
+              <div className="hint">
+                <span className="tag">提示</span>
+                支持主页长链 www.douyin.com/user/MS4...、v.douyin 短链、裸
+                sec_uid、数字 short_id、抖音号。⚠️ 抖音对连续翻页有风控，加载更多若失败请稍后再试
+              </div>
             </div>
-          </div>
+
+            {status && <StatusBar status={status} />}
+
+            {/* 用户资料卡 */}
+            {profile && (
+              <div className="result user-profile">
+                <div className="result-head">
+                  {profile.avatar_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      className="cover avatar"
+                      src={profile.avatar_url}
+                      alt="头像"
+                      onError={(e) => {
+                        const t = e.target as HTMLImageElement;
+                        t.classList.add("placeholder");
+                        t.removeAttribute("src");
+                        t.alt = "无头像";
+                      }}
+                    />
+                  ) : (
+                    <div className="cover placeholder">无头像</div>
+                  )}
+                  <div className="meta">
+                    <div className="title">{profile.nickname}</div>
+                    <div className="author">
+                      📼 作品 {profile.aweme_count} 个
+                      {profile.short_id && profile.short_id !== "0"
+                        ? " · ID " + profile.short_id
+                        : ""}
+                    </div>
+                    {profile.signature && (
+                      <div className="id-line">{profile.signature}</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* 作品列表 */}
+            {profile && userVideos.length > 0 && (
+              <div className="user-videos">
+                <div className="section-title">
+                  <h2>
+                    📋 作品列表（已加载 {userVideos.length}
+                    {profile.aweme_count ? ` / ${profile.aweme_count}` : ""}）
+                  </h2>
+                  <div className="uv-toolbar">
+                    <button className="clear" onClick={selectAll}>
+                      全选
+                    </button>
+                    <button className="clear" onClick={selectNone}>
+                      取消全选
+                    </button>
+                    <button
+                      className="clear"
+                      onClick={downloadBatch}
+                      disabled={!!batchDl || selectedVideos.size === 0}
+                    >
+                      {batchDl
+                        ? `批量下载 ${batchDl.done}/${batchDl.total}`
+                        : `⬇ 下载选中 (${selectedVideos.size})`}
+                    </button>
+                  </div>
+                </div>
+                <div className="uv-grid">
+                  {userVideos.map((v) => (
+                    <div
+                      className={
+                        "uv-item" +
+                        (selectedVideos.has(v.aweme_id) ? " selected" : "")
+                      }
+                      key={v.aweme_id}
+                    >
+                      <label className="uv-card">
+                        <input
+                          type="checkbox"
+                          checked={selectedVideos.has(v.aweme_id)}
+                          onChange={() => toggleSelect(v.aweme_id)}
+                        />
+                        <div className="uv-thumb">
+                          {v.cover_url ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={v.cover_url}
+                              alt=""
+                              onError={(e) => {
+                                const t = e.target as HTMLImageElement;
+                                t.classList.add("placeholder");
+                                t.removeAttribute("src");
+                                t.alt = "无";
+                              }}
+                            />
+                          ) : (
+                            <div className="placeholder">无封面</div>
+                          )}
+                          {v.duration > 0 && (
+                            <span className="uv-dur">{fmtDur(v.duration)}</span>
+                          )}
+                        </div>
+                        <div className="uv-info">
+                          <div className="uv-title">{v.desc || v.aweme_id}</div>
+                          <div className="uv-date">
+                            {v.create_time
+                              ? new Date(v.create_time * 1000)
+                                  .toISOString()
+                                  .slice(0, 10)
+                              : ""}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          className="uv-dl"
+                          title="下载此视频"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            void downloadOne(v);
+                          }}
+                        >
+                          ⬇
+                        </button>
+                      </label>
+                    </div>
+                  ))}
+                </div>
+
+                {/* 加载更多 */}
+                <div className="uv-more">
+                  {hasMoreVideos ? (
+                    <button
+                      className="btn btn-primary"
+                      onClick={() => loadMoreVideos(profile.sec_uid, videoCursor)}
+                      disabled={loadingVideos}
+                    >
+                      {loadingVideos ? (
+                        <>
+                          <span className="spinner" /> 加载中...
+                        </>
+                      ) : (
+                        "⬇ 加载更多"
+                      )}
+                    </button>
+                  ) : (
+                    <span className="badge">
+                      {userVideos.length > 0
+                        ? "没有更多了 / 已加载全部或触发风控"
+                        : "暂无作品"}
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {profile && userVideos.length === 0 && !loadingVideos && (
+              <div className="result">
+                <div className="meta">
+                  <div className="title">未加载到作品</div>
+                  <div className="author">
+                    该用户可能无公开作品，或已触发抖音风控
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
         )}
 
         <footer>本工具仅供个人学习研究使用 · 请尊重原作者版权</footer>
       </div>
     </>
+  );
+}
+
+// ----------------------------------------------------------------------
+// 子组件 / 工具
+// ----------------------------------------------------------------------
+
+function StatusBar({ status }: { status: StatusState }) {
+  return (
+    <div className={`status show ${status.type}`}>
+      <span>
+        {status.type === "error"
+          ? "⚠️"
+          : status.type === "success"
+            ? "✅"
+            : "⏳"}
+      </span>
+      <span>{status.msg}</span>
+    </div>
   );
 }
 
@@ -549,4 +972,10 @@ function timeAgo(ts: number): string {
   if (s < 3600) return Math.floor(s / 60) + " 分钟前";
   if (s < 86400) return Math.floor(s / 3600) + " 小时前";
   return Math.floor(s / 86400) + " 天前";
+}
+
+function fmtDur(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
 }
