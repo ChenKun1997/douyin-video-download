@@ -365,17 +365,22 @@ export default function Home() {
                   "🔍 解析"
                 )}
               </button>
-              <button className="btn btn-ghost" onClick={pasteFromClipboard}>
-                📋 粘贴剪贴板
-              </button>
-              <button
-                className="btn btn-ghost"
-                onClick={() => {
-                  setInput("");
-                }}
-              >
-                ✖ 清空
-              </button>
+              <div className="row-secondary">
+                <button
+                  className="btn btn-ghost"
+                  onClick={pasteFromClipboard}
+                >
+                  📋 粘贴剪贴板
+                </button>
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => {
+                    setInput("");
+                  }}
+                >
+                  ✖ 清空
+                </button>
+              </div>
             </div>
           </div>
           <div className="hint">
@@ -499,20 +504,18 @@ export default function Home() {
                   ) : (
                     <div className="h-cover placeholder">无</div>
                   )}
-                  <div className="h-info">
+                  <button
+                    type="button"
+                    className="h-info"
+                    title="点击重新加载"
+                    onClick={() => onHistoryLoad(h)}
+                  >
                     <div className="h-title">{h.title}</div>
                     <div className="h-author">
                       {h.author ? "👤 " + h.author : ""} · {timeAgo(h.ts)}
                     </div>
-                  </div>
+                  </button>
                   <div className="h-actions">
-                    <button
-                      className="icon-btn"
-                      title="重新加载"
-                      onClick={() => onHistoryLoad(h)}
-                    >
-                      ↻
-                    </button>
                     <button
                       className="icon-btn"
                       title="下载"
@@ -521,7 +524,7 @@ export default function Home() {
                       ⬇
                     </button>
                     <button
-                      className="icon-btn"
+                      className="icon-btn danger"
                       title="删除"
                       onClick={() => deleteHistory(h.aweme_id)}
                     >
