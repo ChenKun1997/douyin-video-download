@@ -1,0 +1,24 @@
+{
+  "name": "douyin-video-download",
+  "version": "1.0.0",
+  "private": true,
+  "description": "抖音无水印视频下载工具 - Next.js + Vercel 版",
+  "scripts": {
+    "dev": "next dev",
+    "dev:clean": "rm -rf .next && next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "next": "^16.2.9",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "typescript": "^5.7.0"
+  }
+}
