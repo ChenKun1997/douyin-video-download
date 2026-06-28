@@ -272,7 +272,7 @@ function buildPlayUrl(
     // 保留原有的额外参数 (如 line)
     let extra = "";
     const em = baseUrl.match(/&(line=\d+)/);
-    if (em) extra = em[1];
+    if (em) extra = "&" + em[1];
     return `${prefix}?video_id=${videoId}&ratio=${ratio}${extra}`;
   }
   return `https://aweme.snssdk.com/aweme/v1/play/?video_id=${videoId}&ratio=${ratio}&line=0`;

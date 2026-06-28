@@ -286,19 +286,11 @@ export default function Home() {
       };
 
       try {
-        let redirectOk = false;
-        try {
-          const probe = await fetch(buildProxyUrl("redirect"), {
-            redirect: "manual",
-          });
-          redirectOk = probe.type === "opaqueredirect";
-        } catch {
-          /* 降级 stream */
-        }
-        if (redirectOk) {
-          trigger(buildProxyUrl("redirect"));
-          return "ok";
-        }
+        // 优先 stream 模式: 服务端流式返回 + Content-Disposition: attachment,
+        // 同源, download 属性有效, 浏览器一定会下载 (不会像 redirect 那样
+        // 跟随 302 到跨域 CDN 导致 download 属性失效、页面跳转播放视频)。
+        // stream 受 Vercel 10s 超时限制, 大视频可能下载不全 —— 但对绝大多数
+        // 抖音视频足够; 超时风险留作 edge case 不再降级到 redirect。
         trigger(buildProxyUrl("stream"));
         return "ok";
       } catch {
