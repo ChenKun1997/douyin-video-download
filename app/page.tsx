@@ -485,12 +485,21 @@ export default function Home() {
   }, [userInput, showStatus]);
 
   const loadVideos = useCallback(
-    async (secUid: string, cursor = 0, append = false) => {
+    async (
+      secUid: string,
+      cursor = 0,
+      append = false,
+      // 显式覆盖 cookie: 保存/清除 cookie 后, setCookie 是异步的, 闭包里
+      // 的 cookie 还是旧值, 故允许调用方直接传入刚保存的值。
+      cookieOverride?: string,
+    ) => {
       setLoadingVideos(true);
       showStatus("info", append ? "正在加载更多..." : "正在加载作品列表...");
       try {
+        const effectiveCookie =
+          cookieOverride !== undefined ? cookieOverride : cookie;
         const headers: Record<string, string> = {};
-        if (cookie.trim()) headers["X-Douyin-Cookie"] = cookie.trim();
+        if (effectiveCookie.trim()) headers["X-Douyin-Cookie"] = effectiveCookie.trim();
         // 翻页时只拉 10 条 (更快); 首次拿满 (匿名上限 ~41)
         const countParam = append ? "&count=10" : "";
         const resp = await fetch(
@@ -966,13 +975,33 @@ export default function Home() {
                     <div className="cookie-actions">
                       <button
                         className="btn btn-ghost"
-                        onClick={() => saveCookie(cookie)}
+                        onClick={() => {
+                          saveCookie(cookie);
+                          // 保存登录 Cookie 后, 若已解析出用户, 用登录态重拉首页,
+                          // 这样 canFetchMore 变 true, 「加载更多」按钮随之出现。
+                          // (传 cookie 覆盖: setCookie 异步, 闭包里还是旧值)
+                          if (profile) {
+                            setUserVideos([]);
+                            setVideoCursor(0);
+                            setHasMoreVideos(false);
+                            void loadVideos(profile.sec_uid, 0, false, cookie);
+                          }
+                        }}
                       >
                         保存
                       </button>
                       <button
                         className="btn btn-ghost"
-                        onClick={() => saveCookie("")}
+                        onClick={() => {
+                          saveCookie("");
+                          // 清除 Cookie 后回到匿名模式, 重新拉首页 (最多 ~41 条)
+                          if (profile) {
+                            setUserVideos([]);
+                            setVideoCursor(0);
+                            setHasMoreVideos(false);
+                            void loadVideos(profile.sec_uid, 0, false, "");
+                          }
+                        }}
                       >
                         清除
                       </button>
