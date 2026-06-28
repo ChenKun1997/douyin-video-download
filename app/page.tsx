@@ -12,7 +12,6 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createZip } from "@/lib/zip";
 
 // ----------------------------------------------------------------------
 // 类型
@@ -355,60 +354,67 @@ export default function Home() {
   }, [showStatus]);
 
   /**
-   * 打包下载图集: 经 /api/proxy?mode=image 拉取每张无水印原图字节,
-   * 用零依赖 zip (STORE 模式) 打成一个 .zip 触发下载。
+   * 逐张下载图集: 每张图经 /api/proxy?mode=image&filename=... 触发浏览器下载。
+   * 不打包成 zip —— 手机端解压麻烦, 逐张保存到相册/下载目录更通用。
+   * 顺序触发并加间隔, 规避浏览器「阻止多次下载」拦截。
    */
-  const downloadAlbumZip = useCallback(async () => {
+  const downloadAlbumImages = useCallback(async () => {
     const images = currentVideo?.images;
     if (!images || !images.length) {
       showStatus("error", "没有可下载的图片");
       return;
     }
     setDownloading(true);
-    showStatus("info", `正在打包 ${images.length} 张图片...`);
-    try {
-      const author = currentVideo?.author || "";
-      const base = buildFilename(author, currentVideo?.title || "图集", "").replace(
-        /\.mp4$/,
-        "",
-      );
-      const files: { name: string; data: Uint8Array }[] = [];
-      let ok = 0;
-      let fail = 0;
-      for (let i = 0; i < images.length; i++) {
-        const img = images[i];
-        const proxyUrl = imgSrc(img.url);
-        try {
-          const resp = await fetch(proxyUrl);
-          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-          const buf = new Uint8Array(await resp.arrayBuffer());
-          const ext = guessImgExt(resp.headers.get("content-type") || "");
-          files.push({ name: `${base}_${String(i + 1).padStart(2, "0")}.${ext}`, data: buf });
-          ok++;
-        } catch {
-          fail++;
-        }
-      }
-      if (!files.length) throw new Error("全部图片获取失败");
-      const blob = await createZip(files);
+    const author = currentVideo?.author || "";
+    const base = buildFilename(author, currentVideo?.title || "图集", "").replace(
+      /\.mp4$/,
+      "",
+    );
+    showStatus("info", `开始下载 ${images.length} 张图片...`);
+    let ok = 0;
+    let fail = 0;
+    const trigger = (url: string, fname: string) => {
       const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = `${base}.zip`;
+      a.href = url;
+      a.download = fname;
       document.body.appendChild(a);
       a.click();
       a.remove();
-      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    };
+    try {
+      for (let i = 0; i < images.length; i++) {
+        const img = images[i];
+        const ext = guessImgExtFromUrl(img.url);
+        const fname = `${base}_${String(i + 1).padStart(2, "0")}.${ext}`;
+        // 用 attachment 模式: 服务端拉图并强制下载, 避免直连抖音图床裂图
+        const proxyUrl =
+          "/api/proxy?url=" +
+          encodeURIComponent(img.url) +
+          "&mode=image&filename=" +
+          encodeURIComponent(fname);
+        // 探测一次确保能拿到 (失败计数), 再触发下载
+        try {
+          const probe = await fetch(proxyUrl, { method: "HEAD" });
+          if (probe.ok) {
+            trigger(proxyUrl, fname);
+            ok++;
+          } else {
+            fail++;
+          }
+        } catch {
+          fail++;
+        }
+        // 间隔规避浏览器多次下载拦截 (尤其 PC 端 Chrome)
+        if (i < images.length - 1) {
+          await new Promise((r) => setTimeout(r, 900));
+        }
+      }
       showStatus(
         fail ? "error" : "success",
         fail
-          ? `打包完成, ${ok} 成功 / ${fail} 失败`
-          : `已打包 ${ok} 张图片`,
-        3000,
-      );
-    } catch (e) {
-      showStatus(
-        "error",
-        "打包失败：" + (e instanceof Error ? e.message : String(e)),
+          ? `下载 ${ok} 张成功 / ${fail} 张失败`
+          : `已触发下载 ${ok} 张图片, 请查看浏览器/相册`,
+        4000,
       );
     } finally {
       setDownloading(false);
@@ -724,7 +730,7 @@ export default function Home() {
                     <div className="id-line">ID: {currentVideo.aweme_id}</div>
                   </div>
                 </div>
-                {/* 图集模式: 预览 + 打包下载 */}
+                {/* 图集模式: 预览 + 逐张下载 */}
                 {currentVideo.type === "album" &&
                   currentVideo.images &&
                   currentVideo.images.length > 0 && (
@@ -764,17 +770,18 @@ export default function Home() {
                       <div className="result-actions">
                         <button
                           className="btn btn-primary"
-                          onClick={downloadAlbumZip}
+                          onClick={downloadAlbumImages}
                           disabled={downloading}
                         >
                           {downloading ? (
                             <>
-                              <span className="spinner" /> 打包中...
+                              <span className="spinner" /> 下载中...
                             </>
                           ) : (
-                            `⬇ 打包下载 ZIP (${currentVideo.images.length} 张)`
+                            `⬇ 下载全部图片 (${currentVideo.images.length} 张)`
                           )}
                         </button>
+                        <span className="badge">逐张保存，不打包（方便手机端）</span>
                       </div>
                     </>
                   )}
@@ -1190,11 +1197,11 @@ function fmtDur(sec: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-/** 根据 content-type 猜图片扩展名。 */
-function guessImgExt(ct: string): string {
-  if (ct.includes("webp")) return "webp";
-  if (ct.includes("png")) return "png";
-  if (ct.includes("jpeg") || ct.includes("jpg")) return "jpg";
-  if (ct.includes("heic")) return "heic";
-  return "jpg";
+/** 从图片 URL 猜扩展名 (抖音图集原图多为 webp/jpeg)。 */
+function guessImgExtFromUrl(url: string): string {
+  const u = url.toLowerCase();
+  if (u.includes(".png")) return "png";
+  if (u.includes(".jpg") || u.includes(".jpeg")) return "jpg";
+  // 抖音图集默认 webp (含 ~tplv-... 标识的图床多为 webp)
+  return "webp";
 }

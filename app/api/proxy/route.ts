@@ -86,7 +86,9 @@ export async function GET(req: NextRequest) {
 
   // ============ image 模式: 图片内联转发 (解决抖音图床在部分网络/地区无法直连) ============
   if (mode === "image") {
-    return imageProxy(url);
+    // filename 仅在用户显式传入时触发下载 (默认 video.mp4 视为预览)
+    const fname = sp.get("filename");
+    return imageProxy(url, fname && fname !== "video.mp4" ? fname : undefined);
   }
 
   // ============ redirect 模式: 探路 + 302 直连 ============
@@ -99,12 +101,14 @@ export async function GET(req: NextRequest) {
 }
 
 /**
- * image 模式: 服务端带 Referer 拉取抖音图床图片, 原样转发 Content-Type,
- * 以 inline 方式返回 (供 <img> 直接渲染)。
+ * image 模式: 服务端带 Referer 拉取抖音图床图片, 原样转发 Content-Type。
+ *
+ * - 不传 filename: inline 返回 (供 <img> 直接渲染, 预览用)
+ * - 传 filename:   attachment 返回 (触发浏览器下载, 单张原图下载用)
  *
  * 解决: 浏览器直连 p3-pc-sign.douyinpic.com 在部分网络/海外/CDN 节点 403 或超时。
  */
-async function imageProxy(url: string) {
+async function imageProxy(url: string, filename?: string) {
   let upstream: Response;
   try {
     upstream = await fetch(url, {
@@ -132,6 +136,12 @@ async function imageProxy(url: string) {
   headers.set("Content-Type", contentType);
   headers.set("Cache-Control", cacheControl);
   headers.set("X-Proxy-Mode", "image");
+  if (filename) {
+    headers.set(
+      "Content-Disposition",
+      `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`,
+    );
+  }
   if (!upstream.body) {
     return new Response("image source empty", { status: 502 });
   }
