@@ -455,21 +455,35 @@ export function getAllQualities(data: Json): Quality[] {
   return qualities;
 }
 
-/** 在解析出的 JSON 中查找封面图 URL。 */
+/**
+ * 在解析出的 JSON 中查找视频封面图 URL。
+ *
+ * 抖音 JSON 里带 url_list 且 key 含 "cover" 的节点很多, 直接深度优先取
+ * 「第一个 cover」会拿到错误封面 —— 例如 music 对象下的 cover_hd /
+ * cover_large / cover_medium / cover_thumb 是**音乐封面**(常为艺人头像,
+ * 正方形), 它们在遍历顺序上排在 video.cover 之前。
+ *
+ * 正确做法: 优先取 **video 对象**(含 play_addr / download_addr / bit_rate
+ * 等兄弟键的节点)下的封面; video 对象里 origin_cover(原封面, 更高清) 优于
+ * cover(标准封面帧); 都没有时再退而取其它 cover, 避免无封面。
+ */
 export function findCover(data: Json): string | null {
-  const found: { url: string | null } = { url: null };
+  // 判断一个对象是否为「视频对象」(而非 music / avatar 等)。
+  // play_addr / download_addr / bit_rate 是 video 节点独有的兄弟键。
+  const isVideoObj = (o: Record<string, Json>): boolean =>
+    "play_addr" in o || "download_addr" in o || "bit_rate" in o;
+
+  const candidates: Array<{ priority: number; url: string }> = [];
 
   const walk = (obj: Json): void => {
-    if (found.url) return;
     if (Array.isArray(obj)) {
-      for (const v of obj) {
-        walk(v);
-        if (found.url) return;
-      }
+      for (const v of obj) walk(v);
       return;
     }
     if (typeof obj !== "object" || obj === null) return;
-    for (const [key, val] of Object.entries(obj)) {
+    const o = obj as Record<string, Json>;
+    const videoObj = isVideoObj(o);
+    for (const [key, val] of Object.entries(o)) {
       if (
         key.toLowerCase().includes("cover") &&
         val &&
@@ -477,15 +491,21 @@ export function findCover(data: Json): string | null {
         Array.isArray((val as { url_list?: Json }).url_list) &&
         typeof (val as { url_list: Json[] }).url_list[0] === "string"
       ) {
-        found.url = (val as { url_list: string[] }).url_list[0];
-        return;
+        const url = (val as { url_list: string[] }).url_list[0];
+        // 优先级: video.origin_cover > video.cover > video 下其它 cover > 非视频封面
+        let priority = 0;
+        if (videoObj && key === "origin_cover") priority = 3;
+        else if (videoObj && key === "cover") priority = 2;
+        else if (videoObj) priority = 1;
+        candidates.push({ priority, url });
       }
       walk(val);
-      if (found.url) return;
     }
   };
   walk(data);
-  return found.url;
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => b.priority - a.priority);
+  return candidates[0].url;
 }
 
 /** 提取标题/作者等元信息。 */
