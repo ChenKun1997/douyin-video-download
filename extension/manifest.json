@@ -1,0 +1,53 @@
+{
+  "manifest_version": 3,
+  "name": "抖音无水印下载",
+  "version": "1.0.0",
+  "description": "在抖音视频/图集页注入下载按钮,解析无水印地址直接下载(不依赖任何服务器)。",
+  "permissions": ["declarativeNetRequest", "downloads"],
+  "host_permissions": [
+    "https://www.douyin.com/*",
+    "https://*.iesdouyin.com/*",
+    "https://v.douyin.com/*",
+    "https://*.snssdk.com/*",
+    "https://*.douyinvod.com/*",
+    "https://*.douyinpic.com/*",
+    "https://*.bytecdn.cn/*",
+    "https://*.byteimg.com/*",
+    "https://*.bdurl.net/*",
+    "https://*.byteoss.com/*",
+    "https://*.amemv.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "抖音无水印下载",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "background": {
+    "service_worker": "dist/background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.douyin.com/*", "https://*.douyin.com/*"],
+      "js": ["dist/content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "douyin_referer",
+        "enabled": true,
+        "path": "src/rules.json"
+      }
+    ]
+  }
+}

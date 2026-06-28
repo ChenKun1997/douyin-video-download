@@ -8,7 +8,10 @@
     "dev:clean": "rm -rf .next && next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "ext": "node scripts/build-extension.mjs",
+    "ext:dev": "node scripts/build-extension.mjs --watch",
+    "ext:prod": "node scripts/build-extension.mjs --prod"
   },
   "dependencies": {
     "next": "^16.2.9",
@@ -19,6 +22,7 @@
     "@types/node": "^22.10.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
+    "esbuild": "^0.24.2",
     "typescript": "^5.7.0"
   }
 }

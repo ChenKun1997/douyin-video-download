@@ -33,3 +33,6 @@ debug_*
 
 # 下载产物 (Python 命令行模式)
 /downloads/
+
+# 浏览器插件构建产物
+/extension/dist/

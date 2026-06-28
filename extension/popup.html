@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>抖音无水印下载</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      width: 340px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      color: #161823;
+      background: #fff;
+    }
+    .header {
+      padding: 14px 16px 10px;
+      background: linear-gradient(135deg, #fe2c55, #ff5e7e);
+      color: #fff;
+    }
+    .header h1 { font-size: 15px; font-weight: 600; }
+    .header p { font-size: 11px; opacity: 0.9; margin-top: 2px; }
+    .body { padding: 14px 16px; }
+    textarea {
+      width: 100%;
+      height: 64px;
+      resize: vertical;
+      padding: 9px 10px;
+      border: 1px solid #e3e3e6;
+      border-radius: 8px;
+      font-size: 13px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.12s;
+    }
+    textarea:focus { border-color: #fe2c55; }
+    .actions { display: flex; gap: 8px; margin-top: 10px; }
+    button {
+      flex: 1;
+      padding: 9px;
+      border: none;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.12s;
+    }
+    button:disabled { opacity: 0.6; cursor: default; }
+    .btn-primary { background: #fe2c55; color: #fff; }
+    .btn-primary:hover { opacity: 0.9; }
+    .btn-ghost { background: #f4f4f5; color: #161823; }
+    .btn-ghost:hover { background: #eee; }
+    .status {
+      margin-top: 10px;
+      font-size: 12px;
+      color: #fe2c55;
+      line-height: 1.5;
+      word-break: break-word;
+      min-height: 16px;
+    }
+    .result { margin-top: 12px; }
+    .result .meta { font-size: 12px; color: #6c6c74; margin-bottom: 8px; }
+    .result .title { font-size: 14px; font-weight: 600; margin-bottom: 4px; line-height: 1.4; }
+    .result .cover { width: 100%; border-radius: 8px; margin-bottom: 10px; }
+    .quality { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+    .quality button {
+      flex: none;
+      padding: 5px 11px;
+      border: 1px solid #e3e3e6;
+      background: #fff;
+      color: #161823;
+      font-size: 12px;
+      font-weight: 400;
+      border-radius: 999px;
+    }
+    .quality button.active { background: #fe2c55; border-color: #fe2c55; color: #fff; }
+    .album-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 5px; margin-bottom: 10px; }
+    .album-grid div { aspect-ratio: 1; border-radius: 5px; overflow: hidden; background: #f0f0f0; }
+    .album-grid img { width: 100%; height: 100%; object-fit: cover; }
+    .spinner {
+      width: 24px; height: 24px; margin: 16px auto;
+      border: 3px solid #f0f0f0; border-top-color: #fe2c55;
+      border-radius: 50%; animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .hint { font-size: 11px; color: #aaa; margin-top: 8px; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>抖音无水印下载</h1>
+    <p>粘贴分享文案 / 链接 → 解析 → 下载</p>
+  </div>
+  <div class="body">
+    <textarea id="input" placeholder="粘贴抖音分享文案或链接…&#10;例: 7.99 复制打开抖音… https://v.douyin.com/xxx/"></textarea>
+    <div class="actions">
+      <button id="paste" class="btn-ghost">粘贴</button>
+      <button id="parse" class="btn-primary">解析</button>
+    </div>
+    <div id="status" class="status"></div>
+    <div id="result" class="result"></div>
+    <div class="hint">提示: 在抖音视频/图集页面右下角也有悬浮下载按钮。</div>
+  </div>
+  <script src="dist/popup.js"></script>
+</body>
+</html>
