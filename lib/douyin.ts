@@ -45,7 +45,32 @@ export interface ParseResult {
   qualities: Quality[];
   cover_url: string | null;
   source_url: string;
+  /** 视频时为 "video" */
+  type: "video";
 }
+
+/** 图集单张图片。 */
+export interface AlbumImage {
+  /** 无水印原图 URL (download_url_list[0], 带签名有时效) */
+  url: string;
+  /** 预览图 (url_list[0], 较低清, 供 UI 缩略图) */
+  preview: string | null;
+  width: number;
+  height: number;
+}
+
+export interface AlbumResult {
+  aweme_id: string;
+  title: string;
+  author: string;
+  cover_url: string | null;
+  source_url: string;
+  images: AlbumImage[];
+  type: "album";
+}
+
+/** 单链接解析结果: 视频或图集 (二选一)。 */
+export type AnyParseResult = ParseResult | AlbumResult;
 
 // ----------------------------------------------------------------------
 // HTTP: 自动跟随重定向 (fetch 默认会跟, 但需要拿到最终 URL 用于解析 ID)
@@ -325,22 +350,121 @@ function extractMeta(data: Json): { title?: string; author?: string } {
   return { title: found.title, author: found.author };
 }
 
+// ----------------------------------------------------------------------
+// 图集 (图文) 解析
+// ----------------------------------------------------------------------
+
 /**
- * 解析抖音链接, 返回完整视频信息。
- * 对应 Python 版 server.py:parse_douyin
+ * 判断解析数据是否为图集 (图文作品)。
+ *
+ * 抖音图集 aweme_type=2, 节点里有 images 数组 (≥1 张), 且其 video 字段
+ * 没有 video_id (影集动态预览, 非可下载视频流)。
  */
-export async function parseDouyin(text: string): Promise<ParseResult> {
+export function isAlbum(data: Json): boolean {
+  // 找到含 images 数组的节点
+  const node = findAlbumNode(data);
+  if (!node) return false;
+  const images = (node as { images?: Json[] }).images;
+  return Array.isArray(images) && images.length > 0;
+}
+
+/** 递归查找含 `images` 数组的节点 (图集 item)。 */
+function findAlbumNode(data: Json): Record<string, Json> | null {
+  const walk = (obj: Json): Record<string, Json> | null => {
+    if (!obj || typeof obj !== "object") return null;
+    if (Array.isArray(obj)) {
+      for (const v of obj) {
+        const r = walk(v);
+        if (r) return r;
+      }
+      return null;
+    }
+    const o = obj as Record<string, Json>;
+    if (Array.isArray(o.images) && o.images.length > 0) {
+      // 进一步确认: 视频作品的 images 为空或不存在, 图集才有
+      return o;
+    }
+    for (const v of Object.values(o)) {
+      const r = walk(v);
+      if (r) return r;
+    }
+    return null;
+  };
+  return walk(data);
+}
+
+/**
+ * 提取图集的无水印原图列表。
+ *
+ * 每张图的 download_url_list[0] 是无水印原图 (带 `-water-` 标识, 最高清);
+ * url_list[0] 是预览图 (带 q80.webp, 较低清, 供 UI 缩略图)。
+ */
+export function getAlbumImages(data: Json): AlbumImage[] {
+  const node = findAlbumNode(data);
+  if (!node) return [];
+  const images = (node.images as Json[]).filter(
+    (img): img is Record<string, Json> =>
+      !!img && typeof img === "object" && !Array.isArray(img),
+  );
+  const out: AlbumImage[] = [];
+  for (const img of images) {
+    const dlList = img.download_url_list as Json[] | undefined;
+    const urlList = img.url_list as Json[] | undefined;
+    const url =
+      Array.isArray(dlList) && typeof dlList[0] === "string"
+        ? (dlList[0] as string)
+        : Array.isArray(urlList) && typeof urlList[0] === "string"
+          ? (urlList[0] as string)
+          : "";
+    if (!url) continue;
+    const preview =
+      Array.isArray(urlList) && typeof urlList[0] === "string"
+        ? (urlList[0] as string)
+        : null;
+    out.push({
+      url,
+      preview,
+      width: typeof img.width === "number" ? img.width : 0,
+      height: typeof img.height === "number" ? img.height : 0,
+    });
+  }
+  return out;
+}
+
+/**
+ * 解析抖音链接, 返回视频或图集信息 (自动识别)。
+ * 对应 Python 版 server.py:parse_douyin (扩展支持图集)
+ */
+export async function parseDouyin(text: string): Promise<AnyParseResult> {
   const url = extractUrl(text);
   const awemeId = await getAwemeId(url);
   const html = await fetchSharePage(awemeId);
   const data = extractRouterData(html);
   if (!data) throw new Error("无法解析页面数据, 抖音接口可能已变更");
 
+  const meta = extractMeta(data);
+  const coverUrl = findCover(data);
+
+  // 先判断是否为图集 (图文): 优先用图集解析路径
+  if (isAlbum(data)) {
+    const images = getAlbumImages(data);
+    if (images.length) {
+      return {
+        aweme_id: awemeId,
+        title: meta.title || awemeId,
+        author: meta.author || "",
+        cover_url: coverUrl,
+        source_url: url,
+        images,
+        type: "album",
+      };
+    }
+  }
+
+  // 视频路径
   const qualities = getAllQualities(data);
   if (!qualities.length) throw new Error("未能从页面找到视频地址");
 
-  const meta = extractMeta(data);
-  const coverUrl = findCover(data);
   // 默认选 720p 作为主地址 (兼容前端 video_url 字段)
   const defaultUrl =
     qualities.find((q) => q.ratio === "720p")?.url || qualities[0].url;
@@ -353,6 +477,7 @@ export async function parseDouyin(text: string): Promise<ParseResult> {
     qualities,
     cover_url: coverUrl,
     source_url: url,
+    type: "video",
   };
 }
 

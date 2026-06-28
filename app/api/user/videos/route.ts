@@ -2,17 +2,16 @@
  * 用户作品列表接口 (单页)
  *
  * GET /api/user/videos?sec_uid=<>&cursor=<>
+ *   header: X-Douyin-Cookie (可选, 登录态 cookie, 解锁翻页拿全部作品)
  *   resp: { ok: true, page: VideoPage } | { ok: false, error: string }
  *
- * 每次只取一页 (≤18 条), 由前端循环调用直到 has_more=false。
- * 这样设计是为了规避 Vercel 函数时长限制, 且每个函数调用很快返回。
- *
- * ⚠️ 抖音对连续分页有风控: 前端应在每页之间加适当间隔 (1~2s),
- *    并在收到风控错误时提示用户稍后再试。
+ * 匿名: 单用户最多 ~41 条, 不能翻页。
+ * 登录态 (带 cookie): 可 cursor 翻页拿全部作品 (前端循环调用)。
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { fetchUserVideoPage } from "@/lib/douyin-user";
+import { setUserCookie } from "@/lib/douyin-web";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,6 +29,9 @@ export async function GET(req: NextRequest) {
   }
   const cursor = Number.isNaN(Number(cursorRaw)) ? 0 : Number(cursorRaw);
 
+  // 可选注入登录 cookie (解锁翻页)
+  setUserCookie(req.headers.get("x-douyin-cookie"));
+
   try {
     const page = await fetchUserVideoPage(secUid, cursor);
     return NextResponse.json({ ok: true, page });
@@ -40,5 +42,8 @@ export async function GET(req: NextRequest) {
       { ok: false, error: msg },
       { status: isRisk ? 429 : 500 },
     );
+  } finally {
+    setUserCookie(null);
   }
 }
+

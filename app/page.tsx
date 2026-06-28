@@ -12,6 +12,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createZip } from "@/lib/zip";
 
 // ----------------------------------------------------------------------
 // 类型
@@ -31,6 +32,16 @@ interface VideoInfo {
   qualities: Quality[];
   cover_url: string | null;
   source_url: string;
+  type?: "video" | "album";
+  /** 图集模式: 无水印原图列表 */
+  images?: AlbumImageItem[];
+}
+
+interface AlbumImageItem {
+  url: string;
+  preview: string | null;
+  width: number;
+  height: number;
 }
 
 interface HistoryItem {
@@ -118,6 +129,20 @@ export default function Home() {
   const [batchDl, setBatchDl] = useState<{ done: number; total: number } | null>(
     null,
   );
+  // 登录态 cookie (解锁翻页拿全部作品); localStorage 持久化
+  const COOKIE_KEY = "douyin_cookie_v1";
+  const [cookie, setCookie] = useState("");
+  const [showCookieInput, setShowCookieInput] = useState(false);
+
+  useEffect(() => {
+    const saved = localStorage.getItem(COOKIE_KEY) || "";
+    setCookie(saved);
+  }, []);
+  const saveCookie = useCallback((v: string) => {
+    setCookie(v);
+    if (v.trim()) localStorage.setItem(COOKIE_KEY, v);
+    else localStorage.removeItem(COOKIE_KEY);
+  }, []);
 
   // ----------------- 历史记录 -----------------
   const loadHistory = useCallback((): HistoryItem[] => {
@@ -329,6 +354,67 @@ export default function Home() {
     }
   }, [showStatus]);
 
+  /**
+   * 打包下载图集: 经 /api/proxy?mode=image 拉取每张无水印原图字节,
+   * 用零依赖 zip (STORE 模式) 打成一个 .zip 触发下载。
+   */
+  const downloadAlbumZip = useCallback(async () => {
+    const images = currentVideo?.images;
+    if (!images || !images.length) {
+      showStatus("error", "没有可下载的图片");
+      return;
+    }
+    setDownloading(true);
+    showStatus("info", `正在打包 ${images.length} 张图片...`);
+    try {
+      const author = currentVideo?.author || "";
+      const base = buildFilename(author, currentVideo?.title || "图集", "").replace(
+        /\.mp4$/,
+        "",
+      );
+      const files: { name: string; data: Uint8Array }[] = [];
+      let ok = 0;
+      let fail = 0;
+      for (let i = 0; i < images.length; i++) {
+        const img = images[i];
+        const proxyUrl = imgSrc(img.url);
+        try {
+          const resp = await fetch(proxyUrl);
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          const buf = new Uint8Array(await resp.arrayBuffer());
+          const ext = guessImgExt(resp.headers.get("content-type") || "");
+          files.push({ name: `${base}_${String(i + 1).padStart(2, "0")}.${ext}`, data: buf });
+          ok++;
+        } catch {
+          fail++;
+        }
+      }
+      if (!files.length) throw new Error("全部图片获取失败");
+      const blob = await createZip(files);
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `${base}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+      showStatus(
+        fail ? "error" : "success",
+        fail
+          ? `打包完成, ${ok} 成功 / ${fail} 失败`
+          : `已打包 ${ok} 张图片`,
+        3000,
+      );
+    } catch (e) {
+      showStatus(
+        "error",
+        "打包失败：" + (e instanceof Error ? e.message : String(e)),
+      );
+    } finally {
+      setDownloading(false);
+    }
+  }, [currentVideo, showStatus]);
+
   const onHistoryLoad = (item: HistoryItem) => {
     renderResult({
       ...item,
@@ -401,22 +487,32 @@ export default function Home() {
   }, [userInput, showStatus]);
 
   const loadVideos = useCallback(
-    async (secUid: string) => {
+    async (secUid: string, cursor = 0, append = false) => {
       setLoadingVideos(true);
-      showStatus("info", "正在加载作品列表...");
+      showStatus("info", append ? "正在加载更多..." : "正在加载作品列表...");
       try {
+        const headers: Record<string, string> = {};
+        if (cookie.trim()) headers["X-Douyin-Cookie"] = cookie.trim();
         const resp = await fetch(
-          `/api/user/videos?sec_uid=${encodeURIComponent(secUid)}&cursor=0`,
+          `/api/user/videos?sec_uid=${encodeURIComponent(secUid)}&cursor=${cursor}`,
+          { headers },
         );
         const json = await resp.json();
         if (!resp.ok || !json.ok) {
           throw new Error(json.error || `请求失败 (${resp.status})`);
         }
         const page = json.page;
-        setUserVideos(page.items);
-        setHasMoreVideos(!!page.has_more);
+        setUserVideos((prev) => (append ? [...prev, ...page.items] : page.items));
+        // 登录态下 page.can_fetch_more 为 true 才能翻页; 匿名恒为 false
+        setHasMoreVideos(!!page.can_fetch_more);
         setVideoCursor(Number(page.max_cursor || 0));
-        showStatus("success", `已加载 ${page.items.length} 个作品`, 2000);
+        showStatus(
+          "success",
+          append
+            ? `又加载 ${page.items.length} 个 (共 ${userVideos.length + page.items.length})`
+            : `已加载 ${page.items.length} 个作品${cookie.trim() ? "（登录态）" : ""}`,
+          2000,
+        );
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         showStatus(
@@ -429,7 +525,7 @@ export default function Home() {
         setLoadingVideos(false);
       }
     },
-    [showStatus],
+    [showStatus, cookie, userVideos.length],
   );
 
   // ----------------- 用户模式: 选择 + 批量下载 -----------------
@@ -591,7 +687,8 @@ export default function Home() {
               <div className="hint">
                 <span className="tag">提示</span>
                 支持短链 v.douyin.com / 长链 www.douyin.com，可直接粘贴 App
-                分享的整段文案 · 输入框内按 Ctrl/Cmd + Enter 快速解析
+                分享的整段文案（视频或图集均可）·
+                输入框内按 Ctrl/Cmd + Enter 快速解析
               </div>
             </div>
 
@@ -627,44 +724,104 @@ export default function Home() {
                     <div className="id-line">ID: {currentVideo.aweme_id}</div>
                   </div>
                 </div>
-                <div className="quality-row">
-                  <span className="label">清晰度：</span>
-                  <div className="quality-options">
-                    {qualities.map((q) => (
+                {/* 图集模式: 预览 + 打包下载 */}
+                {currentVideo.type === "album" &&
+                  currentVideo.images &&
+                  currentVideo.images.length > 0 && (
+                    <>
+                      <div className="album-meta">
+                        <span className="badge">📷 图集 · {currentVideo.images.length} 张</span>
+                        <span className="badge">✓ 无水印原图</span>
+                      </div>
+                      <div className="album-grid">
+                        {currentVideo.images.map((img, idx) => (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <a
+                            key={idx}
+                            className="album-cell"
+                            href={imgSrc(img.preview || img.url)}
+                            target="_blank"
+                            rel="noreferrer"
+                            title="点击查看大图"
+                          >
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={imgSrc(img.preview || img.url)}
+                              alt={`图 ${idx + 1}`}
+                              referrerPolicy="no-referrer"
+                              loading="lazy"
+                              onError={(e) => {
+                                const t = e.target as HTMLImageElement;
+                                t.classList.add("placeholder");
+                                t.removeAttribute("src");
+                                t.alt = "无";
+                              }}
+                            />
+                            <span className="album-idx">{idx + 1}</span>
+                          </a>
+                        ))}
+                      </div>
+                      <div className="result-actions">
+                        <button
+                          className="btn btn-primary"
+                          onClick={downloadAlbumZip}
+                          disabled={downloading}
+                        >
+                          {downloading ? (
+                            <>
+                              <span className="spinner" /> 打包中...
+                            </>
+                          ) : (
+                            `⬇ 打包下载 ZIP (${currentVideo.images.length} 张)`
+                          )}
+                        </button>
+                      </div>
+                    </>
+                  )}
+
+                {/* 视频模式: 清晰度 + 下载 */}
+                {currentVideo.type !== "album" && (
+                  <>
+                    <div className="quality-row">
+                      <span className="label">清晰度：</span>
+                      <div className="quality-options">
+                        {qualities.map((q) => (
+                          <button
+                            key={q.ratio}
+                            className={
+                              "quality-opt" +
+                              (selectedQuality?.ratio === q.ratio
+                                ? " active"
+                                : "")
+                            }
+                            onClick={() => setSelectedQuality(q)}
+                          >
+                            {q.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="result-actions">
                       <button
-                        key={q.ratio}
-                        className={
-                          "quality-opt" +
-                          (selectedQuality?.ratio === q.ratio
-                            ? " active"
-                            : "")
-                        }
-                        onClick={() => setSelectedQuality(q)}
+                        className="btn btn-primary"
+                        onClick={() => download(currentVideo, selectedQuality)}
+                        disabled={downloading}
                       >
-                        {q.label}
+                        {downloading ? (
+                          <>
+                            <span className="spinner" /> 准备中...
+                          </>
+                        ) : (
+                          "⬇ 下载视频"
+                        )}
                       </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="result-actions">
-                  <button
-                    className="btn btn-primary"
-                    onClick={() => download(currentVideo, selectedQuality)}
-                    disabled={downloading}
-                  >
-                    {downloading ? (
-                      <>
-                        <span className="spinner" /> 准备中...
-                      </>
-                    ) : (
-                      "⬇ 下载视频"
-                    )}
-                  </button>
-                  <button className="btn btn-ghost" onClick={copyUrl}>
-                    🔗 复制无水印链接
-                  </button>
-                  <span className="badge">✓ 已解析为无水印地址</span>
-                </div>
+                      <button className="btn btn-ghost" onClick={copyUrl}>
+                        🔗 复制无水印链接
+                      </button>
+                      <span className="badge">✓ 已解析为无水印地址</span>
+                    </div>
+                  </>
+                )}
               </div>
             )}
 
@@ -784,6 +941,43 @@ export default function Home() {
                 分享短链、或 App「分享主页」的整段文案、裸 sec_uid。
                 ⚠️ 抖音号/数字ID 匿名搜索需登录态，大概率解析不了；
                 受抖音匿名接口限制，单用户最多加载最近约 41 个作品
+              </div>
+
+              {/* 登录 Cookie (解锁翻页拿全部作品) */}
+              <div className="cookie-row">
+                <button
+                  type="button"
+                  className="cookie-toggle"
+                  onClick={() => setShowCookieInput((v) => !v)}
+                >
+                  {cookie.trim() ? "🔓 登录态（已填 Cookie）" : "🔒 匿名模式"}{" "}
+                  · 点击{showCookieInput ? "收起" : "填写登录 Cookie 解锁全部"}
+                </button>
+                {showCookieInput && (
+                  <div className="cookie-input">
+                    <textarea
+                      value={cookie}
+                      onChange={(e) => setCookie(e.target.value)}
+                      placeholder={
+                        "（可选）粘贴抖音登录 Cookie，解锁翻页拿全部作品。\n获取方式：电脑浏览器登录 www.douyin.com → F12 → Application/Network → 复制整段 Cookie，需含 sessionid、ttwid 等。\n⚠️ 仅存在本机 localStorage，不上传服务器存储。"
+                      }
+                    />
+                    <div className="cookie-actions">
+                      <button
+                        className="btn btn-ghost"
+                        onClick={() => saveCookie(cookie)}
+                      >
+                        保存
+                      </button>
+                      <button
+                        className="btn btn-ghost"
+                        onClick={() => saveCookie("")}
+                      >
+                        清除
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -915,13 +1109,31 @@ export default function Home() {
                   ))}
                 </div>
 
-                {/* 抖音匿名访问限制说明 (替代失效的「加载更多」) */}
+                {/* 加载更多 (仅登录态可翻页) / 限制说明 */}
                 <div className="uv-more">
-                  <span className="badge uv-limit">
-                    {profile.aweme_count > userVideos.length
-                      ? `已加载最近 ${userVideos.length} 个作品 · 抖音匿名接口限制，无法获取更早的作品（共 ${profile.aweme_count} 个）`
-                      : `已加载全部 ${userVideos.length} 个作品`}
-                  </span>
+                  {hasMoreVideos ? (
+                    <button
+                      className="btn btn-primary"
+                      onClick={() => loadVideos(profile.sec_uid, videoCursor, true)}
+                      disabled={loadingVideos}
+                    >
+                      {loadingVideos ? (
+                        <>
+                          <span className="spinner" /> 加载中...
+                        </>
+                      ) : (
+                        "⬇ 加载更多"
+                      )}
+                    </button>
+                  ) : (
+                    <span className="badge uv-limit">
+                      {cookie.trim()
+                        ? `已加载 ${userVideos.length} 个作品`
+                        : profile.aweme_count > userVideos.length
+                          ? `已加载最近 ${userVideos.length} 个作品 · 匿名接口限制（共 ${profile.aweme_count} 个，填登录 Cookie 可拿全部）`
+                          : `已加载全部 ${userVideos.length} 个作品`}
+                    </span>
+                  )}
                 </div>
               </div>
             )}
@@ -976,4 +1188,13 @@ function fmtDur(sec: number): string {
   const m = Math.floor(sec / 60);
   const s = sec % 60;
   return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+/** 根据 content-type 猜图片扩展名。 */
+function guessImgExt(ct: string): string {
+  if (ct.includes("webp")) return "webp";
+  if (ct.includes("png")) return "png";
+  if (ct.includes("jpeg") || ct.includes("jpg")) return "jpg";
+  if (ct.includes("heic")) return "heic";
+  return "jpg";
 }

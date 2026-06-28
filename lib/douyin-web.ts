@@ -71,6 +71,25 @@ interface TokenCache {
 
 let tokenCache: TokenCache | null = null;
 
+/**
+ * 用户登录态 cookie (可选)。设置后, 所有签名请求改用该 cookie,
+ * 解锁匿名访问下的限制 (如用户作品列表只能拿 ~41 条 / 不能翻页)。
+ *
+ * 由调用方 (API route) 从请求头/参数注入, 进程内有效。
+ * 内容是浏览器 F12 复制的整段 Cookie, 至少含 sessionid / ttwid 等登录字段。
+ */
+let userCookie: string | null = null;
+
+/** 注入(或清除) 用户登录 cookie。传空字符串/null 即恢复匿名模式。 */
+export function setUserCookie(cookie: string | null | undefined) {
+  userCookie = cookie && cookie.trim() ? cookie.trim() : null;
+}
+
+/** 当前是否处于登录态 (已注入用户 cookie)。 */
+export function hasUserCookie(): boolean {
+  return !!userCookie;
+}
+
 /** 随机 msToken (抖音对 web 接口的 msToken 校验较松, 可用随机串)。 */
 function genMsToken(len = 107): string {
   const chars =
@@ -187,7 +206,8 @@ async function buildSignedParams(
   params: Record<string, string | number>,
   body: string,
 ): Promise<{ query: string; ua: string; fp: string; cookie: string }> {
-  const tokens = await getWebTokens();
+  // 登录态: 直接用用户 cookie; 否则匿名 ttwid/msToken
+  const cookie = userCookie || (await getWebTokens()).cookieHeader;
   // 业务参数 + 公共参数 (插入顺序: 先公共, 后业务)
   const all: Record<string, string> = {
     ...COMMON_PARAMS,
@@ -205,7 +225,7 @@ async function buildSignedParams(
     query: signed.params,
     ua: signed.userAgent,
     fp: signed.fingerprint,
-    cookie: tokens.cookieHeader,
+    cookie,
   };
 }
 

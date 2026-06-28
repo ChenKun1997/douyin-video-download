@@ -13,7 +13,7 @@
  *    推荐用户改用主页链接或 sec_uid (1/2/3)。
  */
 
-import { signedRequest } from "./douyin-web";
+import { signedRequest, hasUserCookie } from "./douyin-web";
 import { MOBILE_UA } from "./douyin";
 
 // ----------------------------------------------------------------------
@@ -233,10 +233,9 @@ export interface VideoPage {
 /**
  * 单次请求的 count。
  *
- * 实测 (含 f2 Python 权威实现对照): 抖音 web aweme/post 接口在
- * 「无登录态 / 纯签名访问」下, 单个用户无论 count 多大, 最多只返回
- * ~41 条作品; 且 cursor 分页 (max_cursor≠0) 一律返回空。
- * 因此 count 设 50 以一次性拿满上限, 不再翻页。
+ * - 匿名访问: 抖音 web aweme/post 单用户最多返回 ~41 条, cursor 分页不可用,
+ *   故 count=50 一次性拿满上限。
+ * - 登录态 (注入用户 cookie): 可正常 cursor 翻页拿到全部作品。
  */
 const PAGE_SIZE = 50;
 /** 抖音匿名访问下, 单用户可获取的作品上限 (实测, 含 f2 对照)。 */
@@ -279,8 +278,9 @@ export async function fetchUserVideoPage(
   const d = r.data;
   const list: any[] = Array.isArray(d.aweme_list) ? d.aweme_list : [];
   const items: VideoListItem[] = list.map((a) => parseAweme(a));
-  // 匿名访问下 cursor 分页不可用, 永远不能再加载更多
-  const canFetchMore = false;
+  // 匿名访问下 cursor 分页不可用 (只能拿 ~41 条); 登录态下可正常翻页
+  const canFetchMore =
+    hasUserCookie() && !!d.has_more && list.length > 0;
   return {
     items,
     max_cursor: Number(d.max_cursor || 0),

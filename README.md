@@ -8,15 +8,17 @@
 ## 特性
 
 - **两种下载模式**（顶部 tab 切换）：
-  - **单个视频**：粘贴分享文案/链接，解析后下载（原功能）
-  - **用户主页**：输入用户主页链接 / sec_uid / 抖音号，拉取该用户的全部作品，可批量勾选下载
-- **无水印**：通过解析抖音移动端分享页，拿到带 `watermark=0` 的播放地址
-- **多清晰度**：支持 1080P / 720P / 540P 切换
+  - **单个视频**：粘贴分享文案/链接，解析后下载（支持视频 **和图集**）
+  - **用户主页**：输入用户主页链接 / sec_uid，拉取该用户的作品，可批量勾选下载
+- **图集支持**：图文作品自动识别，预览全部无水印原图，一键打包下载 ZIP（零依赖 STORE 模式）
+- **无水印**：通过解析抖音移动端分享页，拿到带 `watermark=0` 的播放地址 / 原图
+- **多清晰度**：视频支持 1080P / 720P / 540P 切换
 - **支持多种链接格式**：
   - 短链：`https://v.douyin.com/xxxxx/`
   - 长链：`https://www.douyin.com/video/123456`
   - 完整分享文案：直接粘贴 App 里复制的内容，自动提取链接
-  - 用户主页：`https://www.douyin.com/user/MS4w...`、裸 `sec_uid`、数字 `short_id`、抖音号
+  - 用户主页：`https://www.douyin.com/user/MS4w...`、裸 `sec_uid`、分享短链
+- **登录态可选**：用户主页模式可填抖音 Cookie 解锁「下载全部作品」（匿名仅最近 ~41 个）
 - **文件名自动命名**：`作者_视频标题_清晰度.mp4`，自动清洗非法字符
 - **本地历史记录**（Web 版）：localStorage 存储最近 30 条，可重新下载/删除
 - **快捷键**：输入框内按 `Ctrl/Cmd + Enter` 快速解析
@@ -59,8 +61,10 @@ npm run start    # 本地跑生产版本
 │   ├── douyin.ts                 # 单视频解析核心 (对应 Python 版)
 │   ├── sm3.ts                    # SM3 哈希 (a_bogus 签名依赖)
 │   ├── abogus.ts                 # a_bogus 请求签名 (移植自 f2, 易失效)
-│   ├── douyin-web.ts             # web 接口客户端 (ttwid/msToken + 签名请求)
-│   └── douyin-user.ts            # 用户: resolveSecUid + 作品分页
+│   ├── douyin-web.ts             # web 接口客户端 (ttwid/msToken + 签名请求 + 可选登录cookie)
+│   ├── douyin.ts                 # 单视频/图集解析 (分享页 _ROUTER_DATA)
+│   ├── douyin-user.ts            # 用户: resolveSecUid + 作品分页
+│   └── zip.ts                    # 零依赖 ZIP 打包 (STORE 模式, 供图集打包下载)
 ├── next.config.ts
 ├── package.json
 └── tsconfig.json
@@ -94,9 +98,25 @@ npm run start    # 本地跑生产版本
 > - 单用户无论 `count` 多大，**最多返回约 41 条作品**
 > - `cursor` 分页（`max_cursor≠0`）一律返回空，**无法翻页**
 >
-> 这是抖音的反爬机制，**自实现签名绕不过去**。要获取用户全部作品，
-> 只能登录账号带上 cookie（本工具刻意不引入登录态）。当前实现已把单次
-> `count` 调到 50 以一次性拿满上限（~41 个）。
+> 这是抖音的反爬机制。**解决办法**：在用户主页模式填入你的抖音登录 Cookie
+> （见下「图集 & 登录态」），即可翻页拿全部作品。匿名模式下已把 `count`
+> 调到 50 拿满上限（~41 个）。
+
+### 图集 & 登录态（cookie）
+
+**图集（图文作品）**：单视频模式会自动识别图集，预览全部无水印原图（取
+`images[].download_url_list[0]`，最高清原图），一键「打包下载 ZIP」。
+ZIP 打包是零依赖的 STORE 模式实现（`lib/zip.ts`），图片已是压缩格式不二次压缩。
+
+**登录 Cookie（解锁翻页拿全部作品）**：用户主页模式顶部「🔒 匿名模式」点击展开，
+粘贴你的抖音登录 Cookie 即可解锁翻页：
+
+1. 电脑浏览器登录 `www.douyin.com`
+2. F12 → Application/Network → 复制整段 Cookie（需含 `sessionid`、`ttwid` 等）
+3. 粘到「登录 Cookie」输入框 → 保存
+
+Cookie 仅存在**本机 localStorage**，随请求头发给后端用于本次拉取，不在服务器持久化。
+填了 Cookie 后可「加载更多」翻页拿全部作品。
 
 ### 工作原理（与 Python 版的差异）
 

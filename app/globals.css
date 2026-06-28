@@ -804,10 +804,136 @@ footer a {
   filter: brightness(1.08);
 }
 
+/* 登录 Cookie 输入 (用户模式) */
+.cookie-row {
+  margin-top: 12px;
+}
+
+.cookie-toggle {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  color: var(--text-dim);
+  padding: 8px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  min-height: var(--tap);
+}
+
+.cookie-toggle:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.cookie-input {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cookie-input textarea {
+  width: 100%;
+  min-height: 70px;
+  resize: vertical;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  padding: 10px 12px;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  line-height: 1.5;
+}
+
+.cookie-input textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.cookie-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .uv-more {
   display: flex;
   justify-content: center;
   margin-top: 16px;
+}
+
+/* 图集预览网格 (单视频模式 / 图集) */
+.album-meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.album-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.album-cell {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+}
+
+.album-cell img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: transform 0.18s ease;
+}
+
+.album-cell:hover img {
+  transform: scale(1.04);
+}
+
+.album-cell .placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.album-idx {
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  padding: 1px 6px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  border-radius: 6px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (min-width: 640px) {
+  .album-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+@media (min-width: 1024px) {
+  .album-grid {
+    grid-template-columns: repeat(6, 1fr);
+  }
 }
 
 .uv-limit {
