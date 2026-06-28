@@ -627,3 +627,211 @@ footer a {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ====================================================================== */
+/* 模式切换 tab + 用户主页模式 (mobile-first)                              */
+/* ====================================================================== */
+
+.mode-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 6px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.mode-tab {
+  flex: 1;
+  min-height: var(--tap);
+  padding: 0 14px;
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.mode-tab:hover {
+  color: var(--text);
+}
+
+.mode-tab.active {
+  background: var(--accent-grad);
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(254, 44, 85, 0.32);
+}
+
+/* 用户资料卡: 复用 .result, 头像用圆形 */
+.user-profile .cover.avatar {
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: 0 0 auto;
+}
+
+/* 作品列表工具栏 */
+.uv-toolbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.uv-toolbar .clear {
+  font-size: 13px;
+}
+
+/* 作品网格: 默认两列 (移动端), 桌面更多列 */
+.uv-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+
+.uv-item {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  transition: border-color 0.18s ease, transform 0.18s ease;
+}
+
+.uv-item.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(254, 44, 85, 0.35);
+}
+
+.uv-card {
+  position: relative;
+  display: block;
+  cursor: pointer;
+}
+
+.uv-card input[type="checkbox"] {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  width: 20px;
+  height: 20px;
+  accent-color: var(--accent);
+  z-index: 2;
+  cursor: pointer;
+}
+
+.uv-thumb {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  background: var(--bg-soft);
+  overflow: hidden;
+}
+
+.uv-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.uv-thumb .placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.uv-dur {
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+  padding: 1px 6px;
+  background: rgba(0, 0, 0, 0.66);
+  color: #fff;
+  border-radius: 6px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.uv-info {
+  padding: 8px 10px 10px;
+}
+
+.uv-title {
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.uv-date {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.uv-dl {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent-grad);
+  color: #fff;
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+.uv-dl:hover {
+  filter: brightness(1.08);
+}
+
+.uv-more {
+  display: flex;
+  justify-content: center;
+  margin-top: 16px;
+}
+
+.uv-limit {
+  max-width: 100%;
+  line-height: 1.6;
+  text-align: center;
+  white-space: normal;
+  padding: 8px 14px;
+}
+
+/* 桌面端: 作品网格放大列数, tab 文字加大 */
+@media (min-width: 640px) {
+  .uv-grid {
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
+  }
+  .mode-tab {
+    font-size: 16px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .uv-grid {
+    grid-template-columns: repeat(5, 1fr);
+  }
+}
+

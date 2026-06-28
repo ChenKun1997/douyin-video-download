@@ -52,7 +52,12 @@ export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
   const url = sp.get("url");
   const filename = sp.get("filename") || "video.mp4";
-  const mode = sp.get("mode") === "stream" ? "stream" : "redirect";
+  const mode =
+    sp.get("mode") === "image"
+      ? "image"
+      : sp.get("mode") === "stream"
+        ? "stream"
+        : "redirect";
 
   if (!url) {
     return NextResponse.json(
@@ -79,6 +84,11 @@ export async function GET(req: NextRequest) {
 
   const clientRange = req.headers.get("range");
 
+  // ============ image 模式: 图片内联转发 (解决抖音图床在部分网络/地区无法直连) ============
+  if (mode === "image") {
+    return imageProxy(url);
+  }
+
   // ============ redirect 模式: 探路 + 302 直连 ============
   if (mode === "redirect") {
     return resolveRedirect(url, filename);
@@ -86,6 +96,49 @@ export async function GET(req: NextRequest) {
 
   // ============ stream 模式: 流式转发 (兜底) ============
   return streamProxy(url, filename, clientRange);
+}
+
+/**
+ * image 模式: 服务端带 Referer 拉取抖音图床图片, 原样转发 Content-Type,
+ * 以 inline 方式返回 (供 <img> 直接渲染)。
+ *
+ * 解决: 浏览器直连 p3-pc-sign.douyinpic.com 在部分网络/海外/CDN 节点 403 或超时。
+ */
+async function imageProxy(url: string) {
+  let upstream: Response;
+  try {
+    upstream = await fetch(url, {
+      headers: {
+        "User-Agent": MOBILE_UA,
+        Referer: HOMEPAGE_URL,
+        Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+      },
+      redirect: "follow",
+      cache: "no-store",
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return new Response("image fetch failed: " + msg, { status: 502 });
+  }
+  if (upstream.status !== 200) {
+    return new Response(`image source HTTP ${upstream.status}`, {
+      status: 502,
+    });
+  }
+  const contentType = upstream.headers.get("content-type") || "image/jpeg";
+  const cacheControl =
+    upstream.headers.get("cache-control") || "public, max-age=86400";
+  const headers = new Headers();
+  headers.set("Content-Type", contentType);
+  headers.set("Cache-Control", cacheControl);
+  headers.set("X-Proxy-Mode", "image");
+  if (!upstream.body) {
+    return new Response("image source empty", { status: 502 });
+  }
+  return new Response(upstream.body as ReadableStream<Uint8Array>, {
+    status: 200,
+    headers,
+  });
 }
 
 /**
