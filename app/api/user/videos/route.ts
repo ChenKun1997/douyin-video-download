@@ -21,6 +21,7 @@ export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
   const secUid = (sp.get("sec_uid") || "").trim();
   const cursorRaw = (sp.get("cursor") || "0").trim();
+  const countRaw = (sp.get("count") || "").trim();
   if (!secUid) {
     return NextResponse.json(
       { ok: false, error: "缺少 sec_uid 参数" },
@@ -28,12 +29,13 @@ export async function GET(req: NextRequest) {
     );
   }
   const cursor = Number.isNaN(Number(cursorRaw)) ? 0 : Number(cursorRaw);
+  const count = countRaw && !Number.isNaN(Number(countRaw)) ? Number(countRaw) : undefined;
 
   // 可选注入登录 cookie (解锁翻页)
   setUserCookie(req.headers.get("x-douyin-cookie"));
 
   try {
-    const page = await fetchUserVideoPage(secUid, cursor);
+    const page = await fetchUserVideoPage(secUid, cursor, count);
     return NextResponse.json({ ok: true, page });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

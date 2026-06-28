@@ -255,12 +255,15 @@ export const MAX_FETCHABLE = 41;
 export async function fetchUserVideoPage(
   secUid: string,
   cursor = 0,
+  count?: number,
 ): Promise<VideoPage> {
+  // 登录态翻页时用调用方指定的小 count (更快), 否则用 PAGE_SIZE 拿满
+  const size = count && count > 0 ? count : PAGE_SIZE;
   const r = await signedRequest<any>({
     path: "/aweme/v1/web/aweme/post/",
     params: {
       sec_user_id: secUid,
-      count: PAGE_SIZE,
+      count: size,
       max_cursor: cursor,
       locate_query: "false",
       publish_video_strategy_type: 2,

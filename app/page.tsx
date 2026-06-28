@@ -499,8 +499,10 @@ export default function Home() {
       try {
         const headers: Record<string, string> = {};
         if (cookie.trim()) headers["X-Douyin-Cookie"] = cookie.trim();
+        // 翻页时只拉 10 条 (更快); 首次拿满 (匿名上限 ~41)
+        const countParam = append ? "&count=10" : "";
         const resp = await fetch(
-          `/api/user/videos?sec_uid=${encodeURIComponent(secUid)}&cursor=${cursor}`,
+          `/api/user/videos?sec_uid=${encodeURIComponent(secUid)}&cursor=${cursor}${countParam}`,
           { headers },
         );
         const json = await resp.json();
