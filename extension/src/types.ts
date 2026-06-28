@@ -57,6 +57,8 @@ export interface Quality {
   ratio: string;
   label: string;
   url: string;
+  /** 文件字节数 (插件不填, 仅为与网页版协议一致)。 */
+  size?: number;
 }
 
 export interface VideoData {

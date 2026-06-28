@@ -21,6 +21,8 @@ interface Quality {
   ratio: string;
   label: string;
   url: string;
+  /** 文件字节数 (服务端探测所得, 历史记录重载时可能为空)。 */
+  size?: number;
 }
 
 interface VideoInfo {
@@ -807,6 +809,12 @@ export default function Home() {
                             onClick={() => setSelectedQuality(q)}
                           >
                             {q.label}
+                            {q.size ? (
+                              <span className="quality-size">
+                                {" "}
+                                · {formatSize(q.size)}
+                              </span>
+                            ) : null}
                           </button>
                         ))}
                       </div>
@@ -1218,6 +1226,15 @@ function fmtDur(sec: number): string {
   const m = Math.floor(sec / 60);
   const s = sec % 60;
   return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+/** 格式化文件字节数为人类可读大小 (KB / MB)。 */
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return bytes + "B";
+  if (bytes < 1024 * 1024) return Math.round(bytes / 1024) + "KB";
+  const mb = bytes / (1024 * 1024);
+  // ≥100MB 显示整数, 否则保留 1 位小数
+  return (mb >= 100 ? Math.round(mb) : mb.toFixed(1)) + "MB";
 }
 
 /** 从图片 URL 猜扩展名 (抖音图集原图多为 webp/jpeg)。 */

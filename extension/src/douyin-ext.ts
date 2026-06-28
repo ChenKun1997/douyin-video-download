@@ -20,8 +20,17 @@
 /** 移动端分享页首页, 作为 Referer 目标 (由 DNR 注入, 这里仅作记录)。 */
 export const HOMEPAGE_URL = "https://www.iesdouyin.com/";
 
-/** 清晰度档位 (ratio 值 -> 展示名), 与原版一致。 */
+/**
+ * 清晰度档位 (ratio 值 -> 展示名), 与 lib/douyin.ts 保持一致。
+ * 含 "default"(原画/原始流) = 其他下载站的「超高清」: 不转码, 画质最高,
+ * 文件通常比 1080p 大 3~5 倍。
+ *
+ * 注: 插件侧不服务端探测各档真实大小/去重 (SW 无法设 forbidden header,
+ * 且插件是点对点下载、延迟敏感)。若某档对该视频实际不存在, CDN 会静默降级,
+ * 下载仍可成功 (只是画质为低清) —— 与网页版的探测去重为「最佳/最稳」取舍。
+ */
 export const QUALITY_RATIOS: Array<[string, string]> = [
+  ["default", "超高清"], // 原画/原始流 (最高画质)
   ["1080p", "1080P"],
   ["720p", "720P"],
   ["540p", "540P"],
@@ -31,6 +40,8 @@ export interface Quality {
   ratio: string;
   label: string;
   url: string;
+  /** 文件字节数 (插件不填, 仅为与网页版协议一致)。 */
+  size?: number;
 }
 
 export interface ParseResult {
@@ -443,8 +454,11 @@ export async function parseByAwemeId(
   const qualities = getAllQualities(data);
   if (!qualities.length) throw new Error("未能从页面找到视频地址");
 
+  // 默认选 720p (兼顾画质与体积); 720p 缺失时回退首个非超高清档, 再兜底超高清。
   const defaultUrl =
-    qualities.find((q) => q.ratio === "720p")?.url || qualities[0].url;
+    qualities.find((q) => q.ratio === "720p")?.url ||
+    qualities.find((q) => q.ratio !== "default")?.url ||
+    qualities[0].url;
 
   return {
     aweme_id: awemeId,

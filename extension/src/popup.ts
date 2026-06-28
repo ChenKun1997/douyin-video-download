@@ -98,8 +98,11 @@ function renderVideo(el: HTMLElement, data: Extract<ParsedData, { type: "video" 
   const qualities = data.qualities.length
     ? data.qualities
     : [{ ratio: "default", label: "默认", url: data.video_url }];
+  // 默认选 720p (兼顾画质与体积); 缺失时回退首个非超高清档, 再兜底超高清。
   selectedRatio =
-    qualities.find((q) => q.ratio === "720p")?.ratio || qualities[0].ratio;
+    qualities.find((q) => q.ratio === "720p")?.ratio ||
+    qualities.find((q) => q.ratio !== "default")?.ratio ||
+    qualities[0].ratio;
 
   const wrap = document.createElement("div");
   wrap.className = "quality";

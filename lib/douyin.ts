@@ -24,17 +24,32 @@ export const MOBILE_UA =
 export const HOMEPAGE_URL = "https://www.iesdouyin.com/";
 
 // 清晰度档位 (ratio 值 -> 展示名)
-// 与 Python 版一致: 不提供 "default"(原画), 保留 1080p 为最高稳定档。
+// 含 "default"(原画/原始流) —— 即其他下载站的「超高清」: 不经过转码,
+// 文件通常比 1080p 还大 3~5 倍 (画质最高)。实测 default 对绝大多数视频
+// 都返回完整可用文件, 故提供。是否真正可选由 probeQualitySizes 探测后去重决定。
 export const QUALITY_RATIOS: Array<[string, string]> = [
+  ["default", "超高清"], // 原画/原始流 (最高画质)
   ["1080p", "1080P"],
   ["720p", "720P"],
   ["540p", "540P"],
 ];
 
+// 探测用的 ratio 列表。用这 4 个 ratio 各发一个 HEAD 请求拿 Content-Length,
+// 再按「转码档严格递增」的规则识别 CDN 静默降级假档 (见 getAllQualitiesWithSizes)。
+const PROBE_RATIOS = ["540p", "720p", "1080p", "default"];
+
+/** ratio -> 展示名 查找 (转码档去重后重新组装 label 时用)。 */
+function labelOf(ratio: string): string {
+  const entry = QUALITY_RATIOS.find(([r]) => r === ratio);
+  return entry ? entry[1] : ratio;
+}
+
 export interface Quality {
   ratio: string;
   label: string;
   url: string;
+  /** 文件字节数 (服务端 HEAD 探测所得); 无探测结果时为 undefined。 */
+  size?: number;
 }
 
 export interface ParseResult {
@@ -278,7 +293,137 @@ function buildPlayUrl(
   return `https://aweme.snssdk.com/aweme/v1/play/?video_id=${videoId}&ratio=${ratio}&line=0`;
 }
 
-/** 从解析数据中提取所有清晰度选项。 */
+/**
+ * 并行对每个候选 ratio 发一个 HEAD 请求, 拿到各档真实文件大小。
+ *
+ * 抖音 play 接口对实际不存在的转码档会静默降级 (返回低清文件),
+ * 因此「请求成功」不等于「该档真实存在」—— 需用 Content-Length 去重。
+ * 全部请求失败/超时时返回空 Map, 由调用方降级为不带大小的硬编码档。
+ *
+ * 实测 4 个并行 HEAD ≈ 4.5s, 在 Vercel Hobby 10s 限制内。
+ */
+export async function probeQualitySizes(
+  videoId: string,
+  template: string | null,
+): Promise<Map<string, number>> {
+  const results = await Promise.all(
+    PROBE_RATIOS.map(async (ratio) => {
+      const url = buildPlayUrl(videoId, ratio, template);
+      try {
+        // redirect:"follow" 让 fetch 自动跟随到 CDN, 再读最终响应头。
+        const resp = await fetch(url, {
+          method: "HEAD",
+          headers: { "User-Agent": MOBILE_UA, Referer: HOMEPAGE_URL },
+          redirect: "follow",
+        });
+        if (!resp.ok) return [ratio, 0] as const;
+        const len = Number(resp.headers.get("content-length") || 0);
+        return [ratio, len] as const;
+      } catch {
+        return [ratio, 0] as const;
+      }
+    }),
+  );
+  const map = new Map<string, number>();
+  for (const [ratio, len] of results) {
+    if (len > 0) map.set(ratio, len);
+  }
+  return map;
+}
+
+/**
+ * 从解析数据中提取所有真实可用的清晰度选项 (带文件大小, 去重静默降级档)。
+ *
+ * 去重策略 (比单纯「字节相同去重」更稳健):
+ *   抖音 CDN 对视频实际不存在的转码档会**静默降级**返回低清文件。
+ *   真实的转码档, 文件大小随清晰度**严格递增** (540p < 720p < 1080p)。
+ *   因此对 540p/720p/1080p 三档, 从低到高保留「严格大于上一个保留档」的;
+ *   任何一个档若 ≤ 上一个保留档的字节, 就是降级假档, 丢弃。
+ *   default(原画) 不参与单调性判断, 只要探测到就保留 (它是独立的原画通道)。
+ *
+ *   例: 视频无 1080p 编码时, 探测得 540p=2.1M / 720p=2.5M / 1080p=2.1M。
+ *   从低到高: 540p(2.1M) 保留 → 720p(2.5M>2.1M) 保留 → 1080p(2.1M<2.5M) 丢弃。
+ *   即使某次 540p 探测失败, 1080p(2.1M)≤720p(2.5M) 仍会被正确丢弃。
+ *
+ * 探测失败 (空 Map) 时降级: 返回全部硬编码档, size 不填。
+ */
+export async function getAllQualitiesWithSizes(data: Json): Promise<Quality[]> {
+  const found: FoundMeta = { playUrls: [], coverUrl: null };
+  walkFind(data, found);
+
+  let videoId = found.videoId;
+  if (!videoId) {
+    for (const u of found.playUrls) {
+      const m = u.match(/video_id=([0-9a-zA-Z]+)/);
+      if (m) {
+        videoId = m[1];
+        break;
+      }
+    }
+  }
+  if (!videoId) return [];
+
+  const template = found.playUrls.find((u) => u.includes("video_id=")) || null;
+
+  const sizeMap = await probeQualitySizes(videoId, template);
+
+  // 探测失败: 降级为不带大小的全部硬编码档
+  if (sizeMap.size === 0) {
+    return QUALITY_RATIOS.map(([ratio, label]) => ({
+      ratio,
+      label,
+      url: buildPlayUrl(videoId, ratio, template),
+    }));
+  }
+
+  // 转码档按「从低到高」做单调递增过滤 (540p -> 720p -> 1080p)
+  // QUALITY_RATIOS 顺序是高->低, 这里反转处理。
+  const transcodedLowToHigh = ["540p", "720p", "1080p"];
+  const keptTranscoded: Array<[string, string, number]> = [];
+  let prevSize = 0;
+  for (const ratio of transcodedLowToHigh) {
+    const size = sizeMap.get(ratio);
+    if (size === undefined || size === 0) continue; // 该档探测失败
+    // 必须严格大于上一个保留档, 否则视为静默降级假档
+    if (size > prevSize) {
+      keptTranscoded.push([ratio, labelOf(ratio), size]);
+      prevSize = size;
+    }
+  }
+
+  // 组装结果: 按高->低顺序展示 (default 在最前, 然后转码档从高到低)
+  const qualities: Quality[] = [];
+  const defaultSize = sizeMap.get("default");
+  if (defaultSize && defaultSize > 0) {
+    qualities.push({
+      ratio: "default",
+      label: "超高清",
+      url: buildPlayUrl(videoId, "default", template),
+      size: defaultSize,
+    });
+  }
+  for (let i = keptTranscoded.length - 1; i >= 0; i--) {
+    const [ratio, label, size] = keptTranscoded[i];
+    qualities.push({
+      ratio,
+      label,
+      url: buildPlayUrl(videoId, ratio, template),
+      size,
+    });
+  }
+
+  // 极端兜底: 去重后为空 (所有档都探测失败), 返回硬编码档
+  if (!qualities.length) {
+    return QUALITY_RATIOS.map(([ratio, label]) => ({
+      ratio,
+      label,
+      url: buildPlayUrl(videoId, ratio, template),
+    }));
+  }
+  return qualities;
+}
+
+/** 从解析数据中提取所有清晰度选项 (同步版, 不探测大小, 不去重)。 */
 export function getAllQualities(data: Json): Quality[] {
   const found: FoundMeta = { playUrls: [], coverUrl: null };
   walkFind(data, found);
@@ -461,13 +606,16 @@ export async function parseDouyin(text: string): Promise<AnyParseResult> {
     }
   }
 
-  // 视频路径
-  const qualities = getAllQualities(data);
+  // 视频路径: 带大小探测 + 去重 (展示真实可用的清晰度档)
+  const qualities = await getAllQualitiesWithSizes(data);
   if (!qualities.length) throw new Error("未能从页面找到视频地址");
 
-  // 默认选 720p 作为主地址 (兼容前端 video_url 字段)
+  // 默认选 720p 作为主地址 (兼顾画质与体积); 720p 缺失时回退首个非超高清档,
+  // 再兜底超高清。超高清(原画)体积大, 不作默认。
   const defaultUrl =
-    qualities.find((q) => q.ratio === "720p")?.url || qualities[0].url;
+    qualities.find((q) => q.ratio === "720p")?.url ||
+    qualities.find((q) => q.ratio !== "default")?.url ||
+    qualities[0].url;
 
   return {
     aweme_id: awemeId,
